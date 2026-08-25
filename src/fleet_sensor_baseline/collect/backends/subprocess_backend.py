@@ -66,6 +66,13 @@ VERSION_FLAG_SINCE = (0, 2, 0)
 
 VERSION_LINE = re.compile(r"^bmc-sensor-audit\s+(\d+)\.(\d+)\.(\d+)")
 
+#: `preflight` says this when the tool is not on PATH at all. Distinct from
+#: None, which means it IS there and cannot say what it is. The first version
+#: collapsed the two and announced *the referee cannot report a version* for a
+#: referee that was not installed -- a sentence about a program that does not
+#: exist. Found by running the built wheel rather than by reading it.
+ABSENT = "absent"
+
 
 class RefereeTooOld(Exception):
     """The tool on PATH is below the floor this package declares.
@@ -128,7 +135,12 @@ class SubprocessBackend:
         try:
             done = self.runner([*self.command, "--version"])
         except FileNotFoundError:
-            return None
+            # Not installed. Deliberately NOT the same answer as present-and-
+            # mute, and detected through the runner rather than `shutil.which`
+            # so the injection point that lets a test drive this still covers
+            # every branch -- a check routed around the seam is a branch no
+            # test can reach.
+            return ABSENT
         found = VERSION_LINE.search((done.stdout or "") + (done.stderr or ""))
         return tuple(int(g) for g in found.groups()) if found else None
 
@@ -142,6 +154,10 @@ class SubprocessBackend:
         """
         floor = declared_floor()
         observed = self.referee_version()
+        if observed is ABSENT:
+            # Every target reports `is not on PATH` in its own record, so the
+            # run already says this where a reader looks.
+            return ABSENT
         if observed is None:
             if floor is not None and floor >= VERSION_FLAG_SINCE:
                 raise RefereeTooOld(

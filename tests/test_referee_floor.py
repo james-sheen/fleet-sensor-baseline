@@ -21,7 +21,8 @@ import pytest
 
 from fleet_sensor_baseline.collect.backends import subprocess_backend as backend
 from fleet_sensor_baseline.collect.backends.subprocess_backend import (
-    VERSION_FLAG_SINCE, RefereeTooOld, SubprocessBackend, declared_floor)
+    ABSENT, VERSION_FLAG_SINCE, RefereeTooOld, SubprocessBackend,
+    declared_floor)
 
 
 def runner_saying(stdout="", stderr="", returncode=0):
@@ -47,10 +48,33 @@ class TestTheVersionComesFromTheSubprocess:
                                  returncode=2))
         assert tool.referee_version() is None
 
-    def test_a_missing_tool_reports_none_rather_than_raising(self):
+    def test_a_missing_tool_is_ABSENT_which_is_not_the_same_as_mute(self):
+        """Two states, deliberately distinct.
+
+        The first version of this returned None for both, and `collect` then
+        announced *the referee cannot report a version* for a referee that was
+        not installed at all -- a sentence about a program that does not exist.
+        Found by running the built wheel, not by reading the code.
+        """
         def absent(argv):
             raise FileNotFoundError(2, "No such file or directory")
-        assert SubprocessBackend(runner=absent).referee_version() is None
+        assert SubprocessBackend(runner=absent).referee_version() == ABSENT
+
+    def test_absent_and_mute_do_not_compare_equal(self):
+        def absent(argv):
+            raise FileNotFoundError(2, "No such file or directory")
+        mute = SubprocessBackend(
+            runner=runner_saying(stderr="usage: bmc-sensor-audit [-h]\n",
+                                 returncode=2)).referee_version()
+        assert SubprocessBackend(runner=absent).referee_version() != mute
+
+    def test_an_absent_tool_is_never_a_floor_violation(self, monkeypatch):
+        """It cannot be: there is nothing there to be too old. The per-target
+        records say it is not on PATH, which is the accurate complaint."""
+        def absent(argv):
+            raise FileNotFoundError(2, "No such file or directory")
+        monkeypatch.setattr(backend, "declared_floor", lambda: (0, 2, 0))
+        assert SubprocessBackend(runner=absent).preflight() == ABSENT
 
 
 class TestTheFloorIsDerivedNotRestated:

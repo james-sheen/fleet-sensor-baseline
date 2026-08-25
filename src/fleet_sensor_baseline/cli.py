@@ -412,7 +412,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return INCOMPLETE
 
-    from .collect.backends.subprocess_backend import (RefereeTooOld,
+    from .collect.backends.subprocess_backend import (ABSENT, RefereeTooOld,
                                                       subprocess_backend)
     backend = subprocess_backend(args.command.split(), cafile=args.cafile)
 
@@ -426,7 +426,12 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     except RefereeTooOld as exc:
         print(f"collect: {exc}", file=sys.stderr)
         return INCOMPLETE
-    if referee is None:
+    if referee is ABSENT:
+        # Say nothing here. Each target reports `is not on PATH` in its own
+        # record, and announcing that the tool cannot report a version would be
+        # a sentence about a program that is not installed.
+        pass
+    elif referee is None:
         print("collect: the referee on PATH cannot report a version, so which "
               "one produced these records is not recorded", file=sys.stderr)
     else:
