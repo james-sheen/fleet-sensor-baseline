@@ -107,7 +107,19 @@ than an argument against it.
 
 ## Status
 
-**None of these are filed upstream yet.** They are written down here first, with
-the measurement attached, because a report that says *this does not work* and
-cannot say what was run is a report the maintainer has to re-derive before
-acting on it.
+**All four filed 2026-08-25** against `bmc-sensor-audit`, each re-measured against
+the published 0.1.1 artifact rather than a working tree first:
+
+| ask | issue |
+|---|---|
+| conditional requests | [#2](https://github.com/james-sheen/bmc-sensor-audit/issues/2) |
+| certificate pinning | [#3](https://github.com/james-sheen/bmc-sensor-audit/issues/3) |
+| a password that avoids argv | [#4](https://github.com/james-sheen/bmc-sensor-audit/issues/4) |
+| declaring an added prefix | [#5](https://github.com/james-sheen/bmc-sensor-audit/issues/5) |
+
+They were written down here first, with the measurement attached, because a
+report that says *this does not work* and cannot say what was run is a report the
+maintainer has to re-derive before acting on it.
+
+**None is fixed.** The workarounds above stay in place until a release carries the
+surface, and the S5 test that pins the prefix limitation is what will notice.
