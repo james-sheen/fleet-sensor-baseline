@@ -30,9 +30,28 @@ SUMMARY_FORMAT = "fleet-sensor-baseline/summary/1"
 #: enumerates -- it is an implementation necessity of `collect --targets FILE`,
 #: and it ships with a validator for the same reason the other three do.
 TARGETS_FORMAT = "fleet-sensor-baseline/targets/1"
+#: **Version 2 exists for one reason: a declaration an older reader would
+#: IGNORE.** `pin_sha256` says *require exactly this certificate*. A reader that
+#: does not know the key would drop it and connect unpinned -- a security
+#: expectation stated by an operator and met with silence, which is the failure
+#: mode this whole family is pointed at.
+#:
+#: An older build refuses an unknown format outright, so bumping is what turns a
+#: silent downgrade into a refusal. `targets/1` stays valid, and stays the right
+#: choice for a rack list that pins nothing.
+TARGETS_V2_FORMAT = "fleet-sensor-baseline/targets/2"
+
+#: Both are readable by this build. The tuple is ordered oldest-first so a
+#: message can name them in the order somebody would have written them.
+TARGETS_FORMATS = (TARGETS_FORMAT, TARGETS_V2_FORMAT)
+
+#: The pin, in the spelling `openssl x509 -fingerprint -sha256` prints, with or
+#: without colons and in either case.
+PIN_SHA256 = re.compile(r"^(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$|^[0-9A-Fa-f]{64}$")
 
 #: Every format key this build writes and reads, for `validate` to dispatch on.
-FORMATS = (RECORD_FORMAT, BASELINE_FORMAT, SUMMARY_FORMAT, TARGETS_FORMAT)
+FORMATS = (RECORD_FORMAT, BASELINE_FORMAT, SUMMARY_FORMAT, TARGETS_FORMAT,
+           TARGETS_V2_FORMAT)
 
 #: **Part of the format, not of the renderer.** Every consumer that judges
 #: against a `fleet-baseline/1` prints this sentence. A fleet-derived baseline
@@ -242,9 +261,13 @@ def validate_targets(payload: Any) -> list[str]:
     both outcomes. `password_env` names an environment variable instead, so the
     file carries the name and the host carries the value.
     """
-    problems = _base_problems(payload, TARGETS_FORMAT)
-    if problems is not None:
-        return problems
+    if not isinstance(payload, dict):
+        return [f"the targets file is {_kind(payload)}, not an object"]
+    declared = payload.get("format")
+    if declared not in TARGETS_FORMATS:
+        return [f"format is {declared!r}, this build reads "
+                + " or ".join(repr(f) for f in TARGETS_FORMATS)]
+    pins_allowed = declared == TARGETS_V2_FORMAT
 
     targets = payload.get("targets")
     if not isinstance(targets, list):
@@ -263,6 +286,39 @@ def validate_targets(payload: Any) -> list[str]:
         for key in ("unit_key", "base_url"):
             if not isinstance(item.get(key), str) or not item[key]:
                 problems.append(f"{where} carries no {key!r}")
+        pin = item.get("pin_sha256")
+        if pin is not None:
+            if not pins_allowed:
+                # **The whole reason version 2 exists.** Accepting it here would
+                # mean an older build reads the same file, silently ignores the
+                # pin and connects unverified -- the operator's declaration met
+                # with silence.
+                problems.append(
+                    f"{where} declares 'pin_sha256' and this file is "
+                    f"{TARGETS_FORMAT!r}. A reader that predates the key would "
+                    f"ignore it and connect unpinned; declare "
+                    f"{TARGETS_V2_FORMAT!r} so such a reader refuses the file "
+                    f"instead")
+            elif not str(item.get("base_url", "")).lower().startswith("https://"):
+                # **Defence in depth, and it belongs here too.** The referee
+                # refuses this from 0.1.4, but a rack list is reviewed long
+                # before it is run: catching it in the file is catching it where
+                # somebody is looking. Before 0.1.4 the flag was built and
+                # silently dropped, and the walk succeeded unverified.
+                problems.append(
+                    f"{where} declares 'pin_sha256' and a base_url that is not "
+                    f"https. Nothing would verify the connection")
+            elif not isinstance(pin, str) or not PIN_SHA256.match(pin):
+                problems.append(
+                    f"{where} has a 'pin_sha256' that is not a SHA-256 "
+                    f"fingerprint (64 hex, colons optional)")
+            if item.get("insecure"):
+                # Two answers to one question. A pin IS the verification, and
+                # `insecure` turns verification off; whichever won would be a
+                # guess about which the operator meant.
+                problems.append(
+                    f"{where} declares both 'pin_sha256' and 'insecure'. A pin "
+                    f"is the verification and 'insecure' removes it")
         if "password" in item:
             problems.append(
                 f"{where} carries a 'password'. Use 'password_env' and name an "

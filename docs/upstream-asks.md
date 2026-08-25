@@ -1,8 +1,24 @@
 # What this layer could not do, and what closed it
 
-**Five found, five fixed, five released. Four consumed here; one
-(`--cafile`/`--pin-sha256`) is available and not taken. The fifth was created
-by the fix for the first.**
+**Five found, five fixed, five released, ALL FIVE CONSUMED.**
+
+**And taking the last one found two more defects in it**, both in
+`bmc-sensor-audit` and both fixed the same day:
+
+1. **A pin on an `http://` target was silently ignored** (0.1.4). urllib picks a
+   handler by scheme, so the pinned HTTPS handler was never consulted: the pin
+   was built, dropped, and the walk succeeded unverified. An operator who typed
+   a fingerprint would have believed the connection was checked. Found by
+   writing the end-to-end test honestly — it pinned a WRONG certificate and
+   expected the walk to fail, and it passed.
+2. **The refusal then escaped as a traceback, exiting `1`** (0.1.5) — which
+   means *findings* in this family's vocabulary, so a collector read a
+   misconfigured flag as a machine with problems. `main` now catches a named
+   tuple of refusals, and a test enumerates every error class the package
+   defines.
+
+**A security flag that is ignored is worse than one that does not exist**, and
+neither defect was visible from a test that built a client and inspected it.
 
 **The original four are FIXED, RELEASED and CONSUMED as of 2026-08-25.** They shipped in
 `bmc-sensor-audit 0.1.2`; this repository's floor moved to `>=0.1.2` and the
@@ -159,7 +175,7 @@ Fix summary, as landed rather than as asked:
 |---|---|---|
 | 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below | **yes** — `collect --etag-cache`, one cache per surface |
 | 6 | `capture` prints one declared `OUTCOME` line | **yes** — read as contract, unknown values are exit 2 |
-| 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` | not yet — `targets/1` has no field for either |
+| 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` | **yes** — `pin_sha256` in `targets/2`, `collect --cafile` for the run |
 | 4 | `--password-env NAME` and `--password-file PATH` | **yes** — no credential crosses argv |
 | 5 | an empty `OLD` declares a prefix that was added | **yes** — one entry, not one per stem |
 

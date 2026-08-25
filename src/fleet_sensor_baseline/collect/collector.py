@@ -8,8 +8,8 @@ in this layer's own envelopes.
 
 ## What this collector does not do, and why saying so matters
 
-One capability in the specification is still **not reachable through the
-referee's published surface**, and one that was has since been closed:
+**Every capability the specification asked for is now reachable**, each one
+closed upstream after being reported from here:
 
 - ~~**Conditional requests (ETag).**~~ **Closed in `bmc-sensor-audit` 0.1.2 and
   used here.** With `--etag-cache`, the referee asks the BMC whether its sensor
@@ -25,9 +25,19 @@ referee's published surface**, and one that was has since been closed:
   walk, and writes no file, like a failure. The backend reads the printed line
   to tell them apart. That is a real seam and it is filed upstream rather than
   hidden: a machine-readable signal would be a better contract.
-- **Pinned-certificate reads toward BMCs.** The referee's only TLS control is
-  `--insecure`. A collector that wants certificate pinning cannot express it,
-  so this one does not claim to.
+- ~~**Pinned-certificate reads toward BMCs.**~~ **Closed in `bmc-sensor-audit`
+  0.1.3 and used here.** A target may declare `pin_sha256`, and the run may
+  supply `--cafile`.
+
+  **The two live in different places on purpose.** A pin is per-machine, public
+  and machine-independent, so it belongs in the rack list where a change to it
+  shows up in review. A CA bundle is a PATH on one operator's disk and usually
+  fleet-wide, so it is a flag on the run rather than a field in a file that goes
+  into version control.
+
+  **A pin requires `targets/2`.** An older reader would ignore an unknown key
+  and connect unpinned -- a declaration met with silence -- and it refuses an
+  unknown format outright, so the bump turns a silent downgrade into a refusal.
 
 ~~A third is a hazard rather than a gap~~ -- also closed in 0.1.2: the
 credential is passed as `--password-env NAME` and the value never enters argv.
@@ -65,6 +75,12 @@ class Target:
     #: is helpful with it.
     password_env: str | None = None
     insecure: bool = False
+    #: Require the BMC to present exactly this certificate, by SHA-256 of its
+    #: DER. **Unlike `password_env` this is the VALUE, not a name, and that is
+    #: correct**: a fingerprint of a public certificate is public -- anyone who
+    #: can connect can compute it. It is not a credential, it is an expectation,
+    #: and an expectation that changes should show up in a review diff.
+    pin_sha256: str | None = None
     timeout: float | None = None
 
     def password(self) -> str | None:
@@ -129,6 +145,7 @@ def read_targets(payload: Any) -> list[Target]:
             username=item.get("username"),
             password_env=item.get("password_env"),
             insecure=bool(item.get("insecure", False)),
+            pin_sha256=item.get("pin_sha256"),
             timeout=item.get("timeout"),
         ))
     return out

@@ -344,3 +344,74 @@ class TestExitNormalisationReachesTheRecord:
         assert record["exit_code"] == INCOMPLETE
         assert record["raw_exit_code"] == 127
         assert "exited 127" in record["detail"]
+
+
+class TestTlsIsDeclaredNeverDefaulted:
+    """`--cafile` and `pin_sha256`, the last of the five upstream asks.
+
+    **They live in different places and that is the design.** A SHA-256
+    fingerprint of a public certificate is public — anyone who can connect can
+    compute it — so it is not a credential like `password_env`, it is an
+    *expectation*, and an expectation that changes should appear in a review
+    diff. A CA bundle is a PATH on one operator's disk and usually fleet-wide,
+    so it is a flag on the run rather than a field in a file that goes into
+    version control.
+
+    **A pin requires `targets/2`.** An older reader would ignore an unknown key
+    and connect unpinned — a declaration met with silence — and it refuses an
+    unknown format outright, so the bump turns a silent downgrade into a
+    refusal.
+    """
+
+    PIN = "AB" * 32
+
+    def _argv(self, target, **kwargs):
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            subprocess_backend
+        seen = {}
+
+        def runner(argv):
+            seen["argv"] = argv
+            raise FileNotFoundError(2, "no such file")
+
+        with pytest.raises(CollectError):
+            subprocess_backend(runner=runner, **kwargs).capture(target)
+        return seen["argv"]
+
+    def test_a_pin_is_passed_through(self):
+        argv = self._argv(_target("h", pin_sha256=self.PIN))
+        assert argv[argv.index("--pin-sha256") + 1] == self.PIN
+
+    def test_a_cafile_applies_to_every_target(self):
+        argv = self._argv(_target("h"), cafile="/etc/ca.pem")
+        assert argv[argv.index("--cafile") + 1] == "/etc/ca.pem"
+
+    def test_a_pin_wins_over_the_runs_cafile(self):
+        """The more specific declaration wins, and only one TLS flag is ever
+        sent — the referee would have to choose otherwise, and choosing is what
+        this layer exists to avoid."""
+        argv = self._argv(_target("h", pin_sha256=self.PIN), cafile="/etc/ca.pem")
+        assert "--pin-sha256" in argv and "--cafile" not in argv
+
+    def test_insecure_is_the_last_resort(self):
+        argv = self._argv(_target("h", insecure=True))
+        assert "--insecure" in argv
+
+    def test_a_pin_beats_insecure_on_the_same_target(self):
+        """Refused by the validator too, so this is belt and braces — but if one
+        ever reached here, verification must not be the thing that loses."""
+        argv = self._argv(_target("h", pin_sha256=self.PIN, insecure=True))
+        assert "--pin-sha256" in argv and "--insecure" not in argv
+
+    def test_declaring_nothing_sends_no_tls_flag(self):
+        """Non-vacuity: the default is the referee's default, untouched."""
+        argv = self._argv(_target("h"))
+        assert not {"--pin-sha256", "--cafile", "--insecure"} & set(argv)
+
+    def test_a_pin_is_read_out_of_a_targets_file(self):
+        from fleet_sensor_baseline.formats import TARGETS_V2_FORMAT
+        targets = read_targets({
+            "format": TARGETS_V2_FORMAT,
+            "targets": [{"unit_key": "h", "base_url": "https://h",
+                         "pin_sha256": self.PIN}]})
+        assert targets[0].pin_sha256 == self.PIN

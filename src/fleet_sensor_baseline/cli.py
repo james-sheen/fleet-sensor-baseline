@@ -413,7 +413,16 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         return INCOMPLETE
 
     from .collect.backends.subprocess_backend import subprocess_backend
-    backend = subprocess_backend(args.command.split())
+    backend = subprocess_backend(args.command.split(), cafile=args.cafile)
+
+    contradictory = [t.unit_key for t in targets if t.insecure] if args.cafile else []
+    if contradictory:
+        # Declared verification for the run and no verification for a target.
+        # Silently letting either win is a guess about which was meant.
+        print(f"collect: --cafile verifies every BMC and "
+              f"{', '.join(contradictory)} declare 'insecure'. Remove one",
+              file=sys.stderr)
+        return INCOMPLETE
 
     collector = Collector(backend, store, collector_id=args.collector_id,
                           attempts=args.attempts, base_delay=args.base_delay,
@@ -545,6 +554,12 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--attempts", type=int, default=3)
     collect.add_argument("--base-delay", type=float, default=1.0)
     collect.add_argument("--trigger", default="scheduled")
+    collect.add_argument("--cafile", metavar="PATH",
+                         help="verify every BMC against this certificate or CA "
+                              "bundle. A path is machine-specific, so it is a "
+                              "flag rather than a field in a rack list; a "
+                              "per-machine self-signed certificate is what "
+                              "pin_sha256 in targets/2 is for")
     collect.add_argument("--etag-cache", action="store_true",
                          help="ask each BMC whether its sensor SET changed "
                               "before walking it, keeping one cache per surface "

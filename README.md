@@ -6,7 +6,7 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.1.3**, tagged `v0.1.3`, Apache-2.0, on PyPI as
+**Released — 0.1.4**, tagged `v0.1.4`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
 
 ---
@@ -94,6 +94,26 @@ Credentials are named, never stored: a target carries `password_env`, the name
 of an environment variable, and a `password` key in a targets file is refused
 rather than ignored.
 
+**A certificate pin is the opposite, and belongs in the file.** A SHA-256
+fingerprint of a public certificate is public — anyone who can connect can
+compute it — so it is not a credential but an *expectation*, and one that
+changes should show up in a review diff. Declare it per target in a
+`targets/2` file:
+
+```json
+{"unit_key": "h-0042", "base_url": "https://192.0.2.1",
+ "pin_sha256": "AB:CD:...:EF"}
+```
+
+**A pin needs `targets/2` and version 2 exists for exactly that.** A reader
+predating the key would ignore it and connect unpinned — a declaration met with
+silence — and it refuses an unknown format outright, so the bump turns a silent
+downgrade into a refusal.
+
+A CA bundle is a path on one operator's disk and usually fleet-wide, so it is
+`collect --cafile PATH` rather than a field in a list that goes into version
+control.
+
 ## Exit codes
 
 | code | means |
@@ -141,7 +161,7 @@ rule, made executable.
 
 ## Formats
 
-Four, each versioned and each with a shipped validator, because **the person who
+Five, each versioned and each with a shipped validator, because **the person who
 receives the file is the one who needs to check it**:
 
 | format | is |
@@ -150,6 +170,7 @@ receives the file is the one who needs to check it**:
 | `fleet-sensor-baseline/fleet-baseline/1` | a derived declaration, labeled as such |
 | `fleet-sensor-baseline/summary/1` | a verdict, in the family's one vocabulary |
 | `fleet-sensor-baseline/targets/1` | the collector's rack list |
+| `fleet-sensor-baseline/targets/2` | the same, and may declare `pin_sha256` |
 
 `fleet-sensor-baseline validate PATH` checks any of them, dispatching on the format
 key the file declares rather than on a shape guessed from the fields present.
@@ -191,15 +212,15 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 233 |
-| of those, requiring `bmc-sensor-audit` | 31 |
+| tests collected | 256 |
+| of those, requiring `bmc-sensor-audit` | 34 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and
 the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Run it dependency-free and the 31 skip. Install the referee and they run.
+Run it dependency-free and the 34 skip. Install the referee and they run.
 
 **No pass/skip tally is quoted here on purpose.** The first version of this
 section did, and both numbers were wrong within a day — not because tests
@@ -218,12 +239,17 @@ a walk with the referee's own reader and asserts the fixture still matches.
 
 ## Upstream
 
-Pinned at `bmc-sensor-audit>=0.1.3,<0.2`, and the floor is **derived, not
+Pinned at `bmc-sensor-audit>=0.1.5,<0.2`, and the floor is **derived, not
 chosen**. It has moved twice in a day, each time to consume something reported
 from here:
 
 - `>=0.1.2` for `--password-env`, so a credential never crosses argv, and for
   declaring an added aggregation prefix in one entry.
+- `>=0.1.5` for `--pin-sha256` and `--cafile` — and for the two defects taking
+  them found. A pin on an `http://` target was silently ignored (urllib picks a
+  handler by scheme, so the pinned handler was never consulted), and once that
+  was refused, the refusal escaped as a traceback exiting `1` — *findings* — so
+  a collector read a misconfigured flag as a machine with problems.
 - `>=0.1.3` for the `OUTCOME` line. The collector used to tell a skipped walk
   from a real one by matching a printed **sentence**, because that was the only
   signal there was — it worked and rested on nothing. 0.1.3 publishes a declared

@@ -470,3 +470,78 @@ class TestTheOutcomeVocabularyAgrees:
         assert capture.exit_code == 2
         assert "does not know how to act on" in capture.detail
 
+@NEEDS_TOOL
+class TestTheTlsFlagsExistOnTheReferee:
+    """The last of the five asks, checked against the tool rather than assumed.
+
+    This layer sends `--pin-sha256` and `--cafile`. Both were absent until
+    `bmc-sensor-audit` 0.1.3 and were reported from here. **Asserting they exist
+    from this side would be the prefix-dialect mistake again** -- so this asks
+    the installed command.
+    """
+
+    def _capture_flags(self):
+        result = subprocess.run([TOOL, "capture", "--help"],
+                                capture_output=True, text=True)
+        return result.stdout
+
+    def test_the_referee_accepts_the_flags_this_layer_sends(self):
+        helptext = self._capture_flags()
+        for flag in ("--pin-sha256", "--cafile"):
+            assert flag in helptext, (
+                f"this layer sends {flag} and the installed referee does not "
+                f"take it; the pin floor is lower than the surface being used")
+
+    def test_a_pin_on_a_non_https_target_is_refused(self, tmp_path):
+        """**The assertion that matters, and the one that found a defect.**
+
+        This was written expecting a WRONG pin to fail the walk. It passed:
+        urllib picks a handler by scheme, so the pinned HTTPS handler was never
+        consulted for the mock's `http://` URL. The pin was built, dropped, and
+        the walk succeeded unverified -- an operator who typed a fingerprint
+        would have believed the connection was checked.
+
+        Reported upstream and fixed in 0.1.4, which is why this repository's
+        floor moved. **A security flag that is ignored is worse than one that
+        does not exist.**
+
+        The mock speaks HTTP, so this now asserts the refusal rather than a
+        handshake -- and a real handshake still cannot be tested here, because
+        that needs a certificate and its private key as a fixture.
+        """
+        _import_referee()
+        from bmc_sensor_audit.testing.mock_redfish import serve
+
+        with serve(self._machine()) as base_url:
+            assert base_url.startswith("http://"), "the mock stopped being plain"
+            result = subprocess.run(
+                [TOOL, "capture", "--target", base_url,
+                 "--out", str(tmp_path / "w.json"),
+                 "--pin-sha256", "AB" * 32],
+                capture_output=True, text=True)
+        assert result.returncode != 0, (
+            "a pin on a non-https target was accepted, so it was ignored")
+        assert "not https" in (result.stdout + result.stderr)
+
+    def _machine(self):
+        _import_referee()
+        from bmc_sensor_audit.testing.mock_redfish import MockBMC
+        machine = MockBMC()
+        machine.add("Fan_CPU_1")
+        return machine
+
+    def test_the_collector_sends_the_pin_it_was_given(self, tmp_path):
+        """End to end through this layer's own backend, so the argv assembled
+        here is the argv the referee sees."""
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            subprocess_backend
+        from fleet_sensor_baseline.collect.collector import Target
+        from bmc_sensor_audit.testing.mock_redfish import serve
+
+        with serve(self._machine()) as base_url:
+            backend = subprocess_backend()
+            capture = backend.capture(
+                Target(unit_key="h", base_url=base_url, pin_sha256="AB" * 32))
+        assert capture.exit_code == 2, (
+            "a walk under a pin that could not be honoured came back clean")
+

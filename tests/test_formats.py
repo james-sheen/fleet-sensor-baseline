@@ -20,6 +20,7 @@ from conftest import digest_of, walk, write_json
 from fleet_sensor_baseline import cli
 from fleet_sensor_baseline.exits import CLEAN, INCOMPLETE
 from fleet_sensor_baseline.formats import (BASELINE_FORMAT, DOWNGRADE_NOTICE,
+                                           TARGETS_V2_FORMAT,
                                            PROVENANCE_DERIVED, RECORD_FORMAT,
                                            SUMMARY_FORMAT, TARGETS_FORMAT,
                                            validate_any, validate_baseline,
@@ -220,3 +221,81 @@ class TestTheValidateSubcommand:
         path = write_json(tmp_path / "w.json", walk(["Fan_CPU_1"]))
         assert cli.main(["validate", str(path)]) == INCOMPLETE
         assert "this build reads" in capsys.readouterr().out
+
+
+class TestTargetsVersionTwo:
+    """Version 2 exists for exactly one reason: a silent downgrade.
+
+    `pin_sha256` says *require exactly this certificate*. A reader that predates
+    the key would drop it and connect unpinned — an operator's security
+    expectation met with silence. An older build refuses an unknown FORMAT
+    outright, so bumping is what turns that downgrade into a refusal.
+
+    `targets/1` stays valid and stays right for a rack list that pins nothing.
+    """
+
+    PIN = "AB" * 32
+    BASE = {"unit_key": "h-0042", "base_url": "https://192.0.2.1"}
+
+    def _file(self, version, **extra):
+        return {"format": version, "targets": [dict(self.BASE, **extra)]}
+
+    def test_version_one_without_a_pin_is_still_valid(self):
+        """Non-vacuity. If v1 had been retired, every rule below would be about
+        a format nobody can write."""
+        assert validate_targets(self._file(TARGETS_FORMAT)) == []
+
+    def test_version_two_without_a_pin_is_valid_too(self):
+        assert validate_targets(self._file(TARGETS_V2_FORMAT)) == []
+
+    def test_a_pin_in_version_one_is_REFUSED(self):
+        """The whole point. Accepting it would let an older build read the same
+        file and connect unverified."""
+        problems = validate_targets(self._file(TARGETS_FORMAT, pin_sha256=self.PIN))
+        assert problems
+        assert "would ignore it and connect unpinned" in problems[0]
+        assert TARGETS_V2_FORMAT in problems[0], "the refusal must say what to write"
+
+    def test_a_pin_in_version_two_is_accepted(self):
+        assert validate_targets(self._file(TARGETS_V2_FORMAT,
+                                           pin_sha256=self.PIN)) == []
+
+    @pytest.mark.parametrize("spelling", [
+        "AB" * 32,
+        ("ab" * 32),
+        ":".join("AB" for _ in range(32)),
+    ])
+    def test_the_spellings_openssl_prints_are_accepted(self, spelling):
+        """`openssl x509 -fingerprint -sha256` prints colons and uppercase. An
+        operator copies that string; re-typing it is how a pin goes subtly
+        wrong."""
+        assert validate_targets(self._file(TARGETS_V2_FORMAT,
+                                           pin_sha256=spelling)) == []
+
+    @pytest.mark.parametrize("bad", ["nope", "AB" * 31, "ZZ" * 32, ""])
+    def test_a_pin_that_is_not_a_fingerprint_is_refused(self, bad):
+        assert validate_targets(self._file(TARGETS_V2_FORMAT, pin_sha256=bad))
+
+    def test_a_pin_and_insecure_together_are_refused(self):
+        """Two answers to one question. A pin IS the verification and
+        `insecure` removes it; whichever won would be a guess."""
+        problems = validate_targets(
+            self._file(TARGETS_V2_FORMAT, pin_sha256=self.PIN, insecure=True))
+        assert any("insecure" in p for p in problems)
+
+    def test_an_older_build_refuses_the_whole_file(self):
+        """The property the bump buys, asserted rather than assumed: a reader
+        that only knows v1 must refuse v2 outright rather than read it and drop
+        the key it does not recognise."""
+        problems = _base_only_v1(self._file(TARGETS_V2_FORMAT,
+                                            pin_sha256=self.PIN))
+        assert problems and "this build reads" in problems[0]
+
+
+def _base_only_v1(payload):
+    """What `validate_targets` did before version 2 existed."""
+    if payload.get("format") != TARGETS_FORMAT:
+        return [f"format is {payload.get('format')!r}, this build reads "
+                f"{TARGETS_FORMAT!r}"]
+    return []
+

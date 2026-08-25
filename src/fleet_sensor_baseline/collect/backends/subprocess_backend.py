@@ -15,6 +15,11 @@ value in its own process. It still checks the variable is set before spawning,
 so a missing credential is a refusal here rather than a misleading 401 from the
 BMC.
 
+**TLS is declared, never defaulted.** A target's `pin_sha256` wins, then the
+run's `--cafile`, then `insecure`. They are mutually exclusive by construction
+here and refused as a pair by the format validator, so an operator who declared
+a pin can never silently get an unverified connection.
+
 **A skipped walk is read from a declared line, not from prose.** `capture`
 prints one `OUTCOME ` line and the referee publishes it as contract. Until
 0.1.3 there was no such line and this matched a sentence instead -- which
@@ -56,8 +61,14 @@ DEFAULT_COMMAND = ("bmc-sensor-audit",)
 class SubprocessBackend:
     """Runs `bmc-sensor-audit capture` once per target."""
 
-    def __init__(self, command=DEFAULT_COMMAND, *, runner=None) -> None:
+    def __init__(self, command=DEFAULT_COMMAND, *, runner=None,
+                 cafile: str | None = None) -> None:
         self.command = tuple(command)
+        #: One trust store for the whole run. Per-target CA files are not
+        #: offered because nobody has needed one: a fleet either shares an
+        #: internal CA or uses self-signed certificates, and the second case is
+        #: what `pin_sha256` is for.
+        self.cafile = cafile
         #: Injected so a test can assert the ARGV this backend builds without
         #: needing the tool installed. The default is the real thing.
         self.runner = runner or _run
@@ -82,7 +93,11 @@ class SubprocessBackend:
                 # floor moved to 0.1.2.
                 target.password()   # refuses early if the variable is unset
                 argv += ["--password-env", target.password_env]
-            if target.insecure:
+            if target.pin_sha256:
+                argv += ["--pin-sha256", target.pin_sha256]
+            elif self.cafile is not None:
+                argv += ["--cafile", self.cafile]
+            elif target.insecure:
                 argv += ["--insecure"]
             if target.timeout is not None:
                 argv += ["--timeout", str(target.timeout)]
@@ -121,8 +136,9 @@ class SubprocessBackend:
             return capture
 
 
-def subprocess_backend(command=DEFAULT_COMMAND, *, runner=None) -> SubprocessBackend:
-    return SubprocessBackend(command, runner=runner)
+def subprocess_backend(command=DEFAULT_COMMAND, *, runner=None,
+                       cafile: str | None = None) -> SubprocessBackend:
+    return SubprocessBackend(command, runner=runner, cafile=cafile)
 
 
 def _run(argv):
