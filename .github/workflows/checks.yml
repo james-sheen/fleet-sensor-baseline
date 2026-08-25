@@ -24,6 +24,28 @@ permissions:
   contents: read
 
 jobs:
+  # Every interpreter `requires-python` admits, not just the one this workflow
+  # happened to name. `>=3.10` is a claim about five of them and exactly one was
+  # ever run. In a sibling repository that gap hid two end-to-end tests that had
+  # been erroring since 3.13, and every host this family is deployed on runs
+  # 3.14.
+  versions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Tests
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet ".[dev]"
+          python3 -m pytest tests/ -q
+
   checks:
     runs-on: ubuntu-latest
     steps:
