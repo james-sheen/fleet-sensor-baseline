@@ -177,9 +177,13 @@ the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Dependency-free that is **185 passed and 15 skipped** — the 14 above, plus the
-tag check, which skips while this repository has no tags. With the referee
-installed, **199 passed and 1 skipped**.
+Run it dependency-free and the 14 skip. Install the referee and they run.
+
+**No pass/skip tally is quoted here on purpose.** The first version of this
+section did, and both numbers were wrong within a day — not because tests
+changed, but because the repository gained a tag and one check stopped skipping.
+A tally is a fact about the machine that measured it; the collected counts above
+are facts about the suite, and something derives them.
 
 Every skip **says in prose why it could not run, and exits clean**. *Could not
 check* is a different answer from *found nothing*, and a suite that reported the

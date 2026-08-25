@@ -44,12 +44,13 @@ never refused anything is not evidence.
 ## Running the tests
 
 ```
-python3 -m pytest tests/ -q                 # 185 passed, 15 skipped
-pip install -e ".[collect]" && pytest -q    # 199 passed, 1 skipped
+python3 -m pytest tests/ -q                 # the 14 seam tests skip
+pip install -e ".[collect]" && pytest -q    # they run
 ```
 
 The 14 that skip without `bmc-sensor-audit` carry the `seam` marker and exercise
-the upstream boundary. The 15th skips while this repository has no tags.
+the upstream boundary. Quote collected counts, never pass/skip tallies — a tally
+depends on the machine, and `tests/test_readme_counts.py` only owns the former.
 
 Run `python3 tools/hygiene_check.py --all` before opening anything.
 

@@ -124,5 +124,30 @@ They were written down here first, with the measurement attached, because a
 report that says *this does not work* and cannot say what was run is a report the
 maintainer has to re-derive before acting on it.
 
-**None is fixed.** The workarounds above stay in place until a release carries the
-surface, and the S5 test that pins the prefix limitation is what will notice.
+**All four are FIXED UPSTREAM and NOT RELEASED** — `bmc-sensor-audit` commit
+`6511679`, closed 2026-08-25. This repository pins `>=0.1.1,<0.2`, and **0.1.1
+does not carry any of them**, so every workaround above stays exactly as it is
+until a release does.
+
+That is not a formality. `tests/test_scenarios.py::TestS5ThePrefixChange` still
+passes today *because* it is measured against the installed release rather than
+against upstream's master — and it is what will go red when this repository
+raises its floor to a version where the prefix limitation is gone. That red is
+the signal to delete the stem-by-stem workaround, not a regression.
+
+Fix summary, as landed rather than as asked:
+
+| # | landed as |
+|---|---|
+| 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below |
+| 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` |
+| 4 | `--password-env NAME` and `--password-file PATH` |
+| 5 | an empty `OLD` now declares a prefix that was added |
+
+**#2 was implemented differently from the request, and the reason matters here.**
+A per-resource conditional GET needs the previous BODY to use a 304, which means
+a cache of raw Redfish payloads on disk — the fleet-inventory disclosure that
+*the parse is the redaction* exists to prevent. Upstream probes only the
+collections instead, which answers *has the sensor SET changed* and says so.
+That is the question this layer asks, so the narrower fix is the useful one; a
+consumer wanting configuration drift still needs the full walk.
