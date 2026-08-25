@@ -1,9 +1,12 @@
 # What this layer cannot do through the referee's published surface
 
-Three capabilities the specification asks for are **not reachable** by any
-consumer of `bmc-sensor-audit 0.1.1`. They are recorded here rather than faked,
-because a collector that claimed conditional requests while walking every BMC on
-every pass would be lying in exactly the direction that costs a fleet the most.
+**Four items, of two kinds.** Three are capabilities the specification asks for
+that no consumer of `bmc-sensor-audit 0.1.1` can reach (1-3). The fourth is a
+published surface that exists and cannot express the common case (4).
+
+They are recorded here rather than faked, because a collector that claimed
+conditional requests while walking every BMC on every pass would be lying in
+exactly the direction that costs a fleet the most.
 
 Each entry names what was measured, what this repository does instead, and what
 would close it upstream.
