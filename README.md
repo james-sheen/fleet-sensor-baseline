@@ -242,7 +242,7 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 275 |
+| tests collected | 280 |
 | of those, requiring `bmc-sensor-audit` | 34 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and

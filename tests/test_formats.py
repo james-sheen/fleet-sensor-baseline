@@ -19,6 +19,7 @@ import pytest
 from conftest import digest_of, walk, write_json
 from fleet_sensor_baseline import cli
 from fleet_sensor_baseline.exits import CLEAN, INCOMPLETE
+from fleet_sensor_baseline import formats
 from fleet_sensor_baseline.formats import (BASELINE_FORMAT, DOWNGRADE_NOTICE,
                                            TARGETS_V2_FORMAT,
                                            PROVENANCE_DERIVED, RECORD_FORMAT,
@@ -299,3 +300,57 @@ def _base_only_v1(payload):
                 f"{TARGETS_FORMAT!r}"]
     return []
 
+
+
+class TestWalkRefIsDerivedNotSupplied:
+    """It was required, redundant, and unchecked -- all three at once.
+
+    `walk_ref` is `cas/sha256/<hex>`, a pure function of `payload_digest`. A
+    producer therefore had to know the store's internal directory layout to file
+    a record, which is the consumer friction that surfaced this: a record built
+    from the documented example was refused for lacking it.
+
+    And nothing compared the two. A record naming a real digest beside a
+    `walk_ref` pointing at an object that did not exist was accepted and stored,
+    exit 0 -- one fact written twice, in a shipped format, with no check that
+    the copies agreed.
+    """
+
+    def _record(self, **over):
+        digest = "sha256:" + "a" * 64
+        record = {
+            "format": RECORD_FORMAT, "unit_key": "h-1",
+            "topology": {"host": "h-1"},
+            "captured_at": "2026-08-25T09:00:00Z", "exit_code": 0,
+            "payload_digest": digest,
+        }
+        record.update(over)
+        return record
+
+    def test_a_record_without_a_walk_ref_is_accepted(self):
+        """The friction, removed. The digest is enough to find the object."""
+        assert validate_record(self._record()) == []
+
+    def test_a_matching_walk_ref_is_accepted(self):
+        """Records already written keep working."""
+        digest = "sha256:" + "a" * 64
+        assert validate_record(
+            self._record(walk_ref=formats.ref_for(digest))) == []
+
+    def test_a_walk_ref_that_disagrees_is_refused(self):
+        problems = validate_record(
+            self._record(walk_ref="cas/sha256/" + "f" * 64))
+        assert problems, "a ref naming a different object was accepted"
+        assert "disagreeing with the digest" in " ".join(problems)
+
+    def test_a_walk_ref_that_is_not_a_string_is_refused(self):
+        assert validate_record(self._record(walk_ref=17)) != []
+
+    def test_the_two_ref_for_helpers_agree(self):
+        """`formats` cannot import `store` -- `store` imports `formats` -- so
+        the function exists twice. This is the check that makes a second copy
+        safe, and its absence is exactly how the two copies of `walk_ref` came
+        to disagree."""
+        from fleet_sensor_baseline import store as store_module
+        for digest in ("sha256:" + "a" * 64, "sha256:" + "0123abcd" * 8):
+            assert formats.ref_for(digest) == store_module.ref_for(digest)

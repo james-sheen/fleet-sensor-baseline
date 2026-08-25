@@ -37,7 +37,6 @@ One capture of one unit.
   "trigger": "maintenance-event",
   "exit_code": 0,
   "payload_digest": "sha256:...",
-  "walk_ref": "cas/sha256/...",
   "collector": {"id": "rack-17"}
 }
 ```
@@ -49,7 +48,14 @@ non-empty string and never parsed for meaning.
 more than one BMC. **A unit is the tuple**: two records differing only in
 `satellite` are two surfaces of one machine, not two machines.
 
-**Identity lives here and only here.** The walk payload behind `walk_ref`
+`walk_ref` is **derived, not supplied**. It is `cas/sha256/<hex>` -- a pure
+function of `payload_digest` -- so requiring it made a producer know the store's
+internal directory layout to file a record, and wrote one fact twice with nothing
+comparing the copies: a record naming a real digest beside a ref pointing at an
+object that did not exist was accepted and stored clean. It may still be supplied
+for records already written, and it must then agree.
+
+**Identity lives here and only here.** The walk payload behind the digest
 carries none — *the parse is the redaction*, upstream, by design.
 
 ### The two fields the specification did not enumerate

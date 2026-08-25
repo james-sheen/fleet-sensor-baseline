@@ -104,6 +104,19 @@ def _base_problems(payload: Any, expected: str) -> list[str] | None:
     return None
 
 
+def ref_for(digest: str) -> str:
+    """`cas/sha256/<hex>` for a digest.
+
+    Duplicated from `store.ref_for` deliberately: `store` imports this module,
+    so importing it back would be a cycle. `tests/test_formats.py` asserts the
+    two agree, which is the check that makes a second copy safe -- a copy
+    nothing compares is how `walk_ref` came to disagree with the digest in the
+    first place.
+    """
+    algorithm, _, hexdigest = digest.partition(":")
+    return f"cas/{algorithm}/{hexdigest}"
+
+
 def validate_record(payload: Any) -> list[str]:
     """Check one `fleet-record/1`.
 
@@ -156,8 +169,28 @@ def validate_record(payload: Any) -> list[str]:
                 "a record with exit_code 0 carries no valid 'payload_digest' "
                 "(sha256: and 64 hex); a clean capture that cannot produce its "
                 "payload is a claim, not a record")
-        if not isinstance(payload.get("walk_ref"), str):
-            problems.append("a record with exit_code 0 carries no 'walk_ref'")
+        # **`walk_ref` is DERIVED, not supplied.** It was required, and it is a
+        # pure function of the digest above -- `cas/sha256/<hex>` -- so a
+        # producer had to know the store's internal directory layout to file a
+        # record at all, and one fact was written twice in a shipped format.
+        #
+        # Nothing compared the two. A record naming a real digest and a
+        # `walk_ref` pointing at an object that did not exist was accepted and
+        # stored, exit 0. Supplying it is still allowed, for records already
+        # written, and it now has to AGREE: two copies of one fact that
+        # disagree cannot both be right, and picking one is a guess about which
+        # the producer meant.
+        ref = payload.get("walk_ref")
+        if ref is not None:
+            if not isinstance(ref, str):
+                problems.append("'walk_ref' is present and is not a string")
+            elif isinstance(digest, str) and DIGEST.match(digest) \
+                    and ref != ref_for(digest):
+                problems.append(
+                    f"'walk_ref' is {ref!r} and 'payload_digest' resolves to "
+                    f"{ref_for(digest)!r}. The two name one object; supplying "
+                    f"the ref is optional, and disagreeing with the digest is "
+                    f"not")
 
     for key in ("firmware", "collector", "unchanged"):
         if key in payload and not isinstance(payload[key], dict):
