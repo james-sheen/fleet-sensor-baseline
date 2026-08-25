@@ -230,19 +230,42 @@ class TestTheCollectorAgainstAMockRack:
 
 @NEEDS_TOOL
 def test_the_pin_floor_still_resolves():
-    """The pin is a claim about every release in its range.
+    """The pin is a claim about every release in its range, checked against the
+    tool that ANSWERS.
 
-    Checked against what is INSTALLED rather than against the metadata, because
-    the metadata is the claim and the installation is the fact.
+    Both halves of this were wrong for two releases. It asserted `>= (0, 1, 1)`
+    while the package pinned 0.1.5 -- a tolerance the floor moved out from under,
+    twice, so the guard would have accepted a referee four releases below what
+    the code calls. And it read `importlib.metadata`, which is the *claim* pip
+    resolved, while its own docstring said it was checking the installation
+    because the installation is the fact. The fact is what PATH runs: metadata
+    can report 0.1.5 while the subprocess answers 0.1.1.
+
+    Nothing here restates a version. The floor is read from this package's own
+    metadata and the version from the tool itself, so neither can drift.
     """
-    from importlib import metadata
-    installed = metadata.version("bmc-sensor-audit")
-    parts = tuple(int(p) for p in installed.split(".")[:3] if p.isdigit())
-    assert parts >= (0, 1, 1), (
-        f"bmc-sensor-audit {installed} is installed and this build calls "
-        f"validate-walk and capture --print-digest, neither of which exists "
-        f"before 0.1.1")
-    assert parts < (0, 2), f"bmc-sensor-audit {installed} is outside the pin"
+    from fleet_sensor_baseline.collect.backends.subprocess_backend import (
+        RefereeTooOld, SubprocessBackend, declared_floor)
+
+    floor = declared_floor()
+    if floor is None:
+        pytest.skip("no installed metadata for this package, so its declared "
+                    "floor could not be read and nothing was compared")
+
+    tool = SubprocessBackend()
+    try:
+        observed = tool.preflight()
+    except RefereeTooOld as refusal:      # pragma: no cover - the failure path
+        pytest.fail(str(refusal))
+
+    if observed is None:
+        pytest.skip(
+            f"the referee on PATH predates --version, so it cannot say what it "
+            f"is; the declared floor is {'.'.join(map(str, floor))}, which is "
+            f"below the release that added the flag, so this is legitimate and "
+            f"unverifiable rather than a pass")
+    assert observed >= floor
+    assert observed < (0, 3), f"bmc-sensor-audit {observed} is outside the pin"
 
 @NEEDS_TOOL
 class TestTheDialectsAgree:

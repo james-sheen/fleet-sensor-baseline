@@ -57,6 +57,49 @@ OUTCOMES = {"walked", "unchanged"}
 
 DEFAULT_COMMAND = ("bmc-sensor-audit",)
 
+#: The release that gave the referee a `--version` flag. Before it, `--version`
+#: exited 2 with an argparse usage error, so a referee that cannot answer is not
+#: an unknown version -- it is conclusively OLDER than this one. That inference
+#: is what lets an absent flag be treated as a floor violation rather than as a
+#: shrug.
+VERSION_FLAG_SINCE = (0, 2, 0)
+
+VERSION_LINE = re.compile(r"^bmc-sensor-audit\s+(\d+)\.(\d+)\.(\d+)")
+
+
+class RefereeTooOld(Exception):
+    """The tool on PATH is below the floor this package declares.
+
+    Worth its own type because it is INCOMPLETE (2), never a finding (1): a run
+    that used the wrong referee has not audited a fleet badly, it has not
+    audited it at all.
+    """
+
+
+def declared_floor():
+    """The floor this package declares, read from its OWN metadata.
+
+    Not a constant repeated here. The requirement lives once, in
+    `pyproject.toml`, and ships into the installed distribution's metadata; a
+    second copy in this module would be the same number written twice and would
+    drift the first time the floor moved -- which it has done three times.
+
+    Returns None from a source tree with no installed metadata, which is a
+    can-not-tell rather than a pass.
+    """
+    from importlib import metadata
+    try:
+        requirements = metadata.requires("fleet-sensor-baseline") or []
+    except metadata.PackageNotFoundError:
+        return None
+    for requirement in requirements:
+        if not requirement.startswith("bmc-sensor-audit"):
+            continue
+        found = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", requirement)
+        if found:
+            return tuple(int(g) for g in found.groups())
+    return None
+
 
 class SubprocessBackend:
     """Runs `bmc-sensor-audit capture` once per target."""
@@ -72,6 +115,47 @@ class SubprocessBackend:
         #: Injected so a test can assert the ARGV this backend builds without
         #: needing the tool installed. The default is the real thing.
         self.runner = runner or _run
+
+    def referee_version(self):
+        """What the tool on PATH says it is, or None if it cannot say.
+
+        The version that matters is not the one pip resolved. This package never
+        imports the referee -- it runs it as a subprocess found on PATH -- so a
+        system-wide install, a pipx shim, or another venv earlier on PATH answers
+        instead, and the declared floor never sees it. Measured: metadata can
+        report 0.1.5 while PATH answers 0.1.1.
+        """
+        try:
+            done = self.runner([*self.command, "--version"])
+        except FileNotFoundError:
+            return None
+        found = VERSION_LINE.search((done.stdout or "") + (done.stderr or ""))
+        return tuple(int(g) for g in found.groups()) if found else None
+
+    def preflight(self):
+        """Check the referee ONCE per run, before any machine is walked.
+
+        Once, not per target: a fleet run walks thousands of BMCs and the
+        referee cannot change underneath it. Returns the version it observed so
+        the caller can record it beside the verdicts -- a reader asking which
+        referee produced a record should not have to guess.
+        """
+        floor = declared_floor()
+        observed = self.referee_version()
+        if observed is None:
+            if floor is not None and floor >= VERSION_FLAG_SINCE:
+                raise RefereeTooOld(
+                    f"{self.command[0]} on PATH cannot report a version, so it "
+                    f"predates {'.'.join(map(str, VERSION_FLAG_SINCE))}; this "
+                    f"build needs >= {'.'.join(map(str, floor))}")
+            return None
+        if floor is not None and observed < floor:
+            raise RefereeTooOld(
+                f"{self.command[0]} on PATH is "
+                f"{'.'.join(map(str, observed))}; this build needs >= "
+                f"{'.'.join(map(str, floor))}. The floor pip enforced applies "
+                f"to the environment it installed, not to what PATH resolves")
+        return observed
 
     def capture(self, target: Target, etag_cache: str | None = None) -> Capture:
         with tempfile.TemporaryDirectory(prefix="fsb-capture-") as tmp:

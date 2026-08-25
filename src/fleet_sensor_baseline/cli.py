@@ -412,8 +412,25 @@ def _cmd_collect(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return INCOMPLETE
 
-    from .collect.backends.subprocess_backend import subprocess_backend
+    from .collect.backends.subprocess_backend import (RefereeTooOld,
+                                                      subprocess_backend)
     backend = subprocess_backend(args.command.split(), cafile=args.cafile)
+
+    # Before any machine is walked, once. The floor in this package's metadata
+    # governs the environment pip installed into; PATH decides what actually
+    # answers, and the two disagree whenever a system-wide install or another
+    # venv sits earlier. INCOMPLETE, never a finding: a fleet audited by the
+    # wrong referee has not been audited.
+    try:
+        referee = backend.preflight()
+    except RefereeTooOld as exc:
+        print(f"collect: {exc}", file=sys.stderr)
+        return INCOMPLETE
+    if referee is None:
+        print("collect: the referee on PATH cannot report a version, so which "
+              "one produced these records is not recorded", file=sys.stderr)
+    else:
+        print(f"collect: referee {'.'.join(map(str, referee))} on PATH")
 
     contradictory = [t.unit_key for t in targets if t.insecure] if args.cafile else []
     if contradictory:
