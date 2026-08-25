@@ -13,4 +13,11 @@
 #
 # To commit past it knowingly:   git commit --no-verify
 set -e
-exec python3 "$(git rev-parse --show-toplevel)/tools/hygiene_check.py"
+ROOT="$(git rev-parse --show-toplevel)"
+
+# FIRST, because it decides whether anything below it can speak for this commit.
+# The checks here read the WORKING TREE and the commit records the INDEX; when
+# those differ, a green hook is green about files that are not being committed.
+python3 "$ROOT/tools/hygiene_check.py" --staged-is-what-ships
+
+exec python3 "$ROOT/tools/hygiene_check.py"
