@@ -6,7 +6,7 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.1.1**, tagged `v0.1.1`, Apache-2.0, on PyPI as
+**Released — 0.1.2**, tagged `v0.1.2`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
 
 ---
