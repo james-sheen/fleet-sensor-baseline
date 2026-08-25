@@ -1,6 +1,9 @@
 # What this layer could not do, and what closed it
 
-**All four are FIXED, RELEASED and CONSUMED as of 2026-08-25.** They shipped in
+**Four found, fixed, released; three consumed. A fifth is open, and it was
+created by the fix for the first.**
+
+**The original four are FIXED, RELEASED and CONSUMED as of 2026-08-25.** They shipped in
 `bmc-sensor-audit 0.1.2`; this repository's floor moved to `>=0.1.2` and the
 workarounds below are gone from the code. The entries are kept because *what was
 missing and why it mattered* is the part that does not survive in a changelog.
@@ -164,12 +167,35 @@ about whether a certificate pin belongs in a rack list that lives in version
 control or in a sidecar the way the password already does. Not done is a
 different sentence from *fixed*.
 
-**Taking #2 immediately paid for itself twice.** It exposed that the referee
-announces a skip only in PROSE -- exit 0 like a walk, no file like a failure --
-so the backend has to match a printed line; a machine-readable signal would be a
-better contract, and that is a new upstream ask. And a test assertion written
-expecting the old digest-dedup behaviour failed, which is how the *store
-collapses a homogeneous fleet* claim was finally measured and found false.
+**Taking #2 immediately paid for itself twice**, and both are recorded rather
+than absorbed:
+
+- It exposed that the referee announces a skip **only in prose** -- exit 0, like
+  a walk, with an absent file as the only structural difference. So the backend
+  matches `\bsensor set unchanged\b`. That works and is the wrong kind of
+  contract: prose can be reworded without it reading as a breaking change, while
+  `walk/1`'s format string carries a written stability statement. Filed as
+  [#6](https://github.com/james-sheen/bmc-sensor-audit/issues/6), **open**.
+- A test assertion written expecting the old digest-dedup behaviour FAILED,
+  which is how the *store collapses a homogeneous fleet* claim was finally
+  measured and found false. See `store.py`.
+
+## 5. Telling a skip apart from a walk (still open)
+
+**Measured on 0.1.2.** With a populated cache and an unchanged BMC, `capture
+--etag-cache` exits `0` and writes nothing; a normal walk also exits `0`. The
+only affirmative signal is a printed sentence.
+
+**What this repository does.** Matches the sentence, in
+`collect/backends/subprocess_backend.py`, and says so in a comment rather than
+letting it look structural.
+
+**What would close it.** A distinct exit code for the skip, or one
+machine-readable line beside the prose.
+
+**This one is ours.** It was introduced by the fix for #1 above, written in this
+family, and found within the hour by building the consumer -- which is the same
+loop that produced the other four, run against our own work.
 
 **#2 was implemented differently from the request, and the reason matters here.**
 A per-resource conditional GET needs the previous BODY to use a 304, which means
