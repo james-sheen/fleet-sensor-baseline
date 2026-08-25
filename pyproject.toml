@@ -40,7 +40,13 @@ dependencies = []
 # The specification this repository was built from pinned `>=0.1.0,<0.2` while
 # describing an implementation that calls both -- a pin is a claim about every
 # release in its range, and that one was false at its own floor.
-collect = ["bmc-sensor-audit>=0.1.1,<0.2"]
+#
+# **Raised to 0.1.2 on 2026-08-25**, and for the same kind of reason: the
+# collector now passes `--password-env` so a credential never crosses argv, and
+# declares an added aggregation prefix in one entry. Neither exists in 0.1.1.
+# Four gaps reported from here were fixed there; raising the floor is what
+# turns them from a note into a capability.
+collect = ["bmc-sensor-audit>=0.1.2,<0.2"]
 dev = ["pytest>=7"]
 
 [project.scripts]

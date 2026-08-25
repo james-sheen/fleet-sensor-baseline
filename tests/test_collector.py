@@ -291,6 +291,38 @@ class TestTheSubprocessArgv:
         assert "--insecure" not in self._argv(_target("h-0000"))
         assert "--insecure" in self._argv(_target("h-0000", insecure=True))
 
+    def test_the_password_VALUE_never_reaches_argv(self, monkeypatch):
+        """**The exposure this repository reported upstream and can now avoid.**
+
+        `ps` shows argv to every user on the host, and a rack collector walks
+        continuously. The referee gained `--password-env` in 0.1.2; the NAME
+        goes across, the value does not.
+        """
+        monkeypatch.setenv("BMC_PASS_TEST", "hunter2")
+        argv = self._argv(_target("h-0000", password_env="BMC_PASS_TEST"))
+        assert "hunter2" not in argv, "the credential is in the process table"
+        assert "--password" not in argv
+        assert argv[argv.index("--password-env") + 1] == "BMC_PASS_TEST"
+
+    def test_an_unset_variable_refuses_before_the_tool_is_spawned(self,
+                                                                  monkeypatch):
+        """Passing the name of an unset variable would reach the BMC as an
+        anonymous request and come back 401 -- sending an operator to look at
+        their BMC credentials rather than at the variable they forgot to set."""
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            subprocess_backend
+        monkeypatch.delenv("BMC_PASS_TEST", raising=False)
+        spawned = []
+
+        def runner(argv):
+            spawned.append(argv)
+            raise AssertionError("the tool was spawned despite the refusal")
+
+        backend = subprocess_backend(runner=runner)
+        with pytest.raises(CollectError, match="is not set"):
+            backend.capture(_target("h-0000", password_env="BMC_PASS_TEST"))
+        assert not spawned
+
     def test_a_missing_command_is_named_not_swallowed(self):
         from fleet_sensor_baseline.collect.backends.subprocess_backend import \
             subprocess_backend

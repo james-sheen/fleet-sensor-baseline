@@ -8,6 +8,12 @@ output is the only thing a real deployment ever sees.
 What is read back: the exit code, the digest line printed by `--print-digest`,
 and the bytes of the file the tool wrote. Three surfaces, all published, all
 checked against each other.
+
+**Credentials never cross argv.** A target names an environment variable and
+this backend passes the NAME through `--password-env`; the referee reads the
+value in its own process. It still checks the variable is set before spawning,
+so a missing credential is a refusal here rather than a misleading 401 from the
+BMC.
 """
 
 from __future__ import annotations
@@ -45,13 +51,16 @@ class SubprocessBackend:
                 "--out", str(out), "--print-digest"]
             if target.username:
                 argv += ["--username", target.username]
-            password = target.password()
-            if password is not None:
-                # **This crosses argv, and that is a real exposure on a shared
-                # host.** The referee publishes no other way to pass one. Filed
-                # upstream rather than papered over; see the module docstring in
-                # `collect/collector.py`.
-                argv += ["--password", password]
+            if target.password_env is not None:
+                # **The value never enters argv.** The referee reads the
+                # variable itself, in its own process. Until 0.1.2 the only way
+                # to pass a password was `--password VALUE`, where `ps` shows it
+                # to every user on the host for the length of the walk -- and a
+                # rack collector walks continuously. Reported from here as
+                # issue #4 and released there; this is the whole reason the
+                # floor moved to 0.1.2.
+                target.password()   # refuses early if the variable is unset
+                argv += ["--password-env", target.password_env]
             if target.insecure:
                 argv += ["--insecure"]
             if target.timeout is not None:

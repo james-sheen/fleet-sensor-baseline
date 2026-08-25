@@ -302,11 +302,11 @@ class TestS5ThePrefixChange:
         assert "undeclared prefix" in captured.out
         assert "'HMC0_'" in captured.out
 
-    #: The declaration an operator has to write, stem by stem, because the
-    #: referee's dialect refuses an empty OLD. One entry would do it if a prefix
-    #: being ADDED were expressible; see `docs/upstream-asks.md`.
-    DECLARED = ("--aggregation-prefix", "Fan_CPU_=HMC0_Fan_CPU_",
-                "--aggregation-prefix", "Inlet_=HMC0_Inlet_")
+    #: One entry, since `bmc-sensor-audit` 0.1.2 lifted the refusal this
+    #: repository reported (#5). It used to take one declaration per sensor-name
+    #: stem -- `Fan_CPU_=HMC0_Fan_CPU_`, `Inlet_=HMC0_Inlet_` -- once for every
+    #: distinct root on the machine.
+    DECLARED = ("--aggregation-prefix", "=HMC0_")
 
     def test_declared_it_pairs_with_a_note_and_finds_nothing(self, fleet,
                                                              capsys):
@@ -316,23 +316,28 @@ class TestS5ThePrefixChange:
         assert code == CLEAN, captured.out
         assert "paired through a declared prefix" in captured.out
 
-    def test_adding_a_prefix_cannot_be_declared_in_one_entry(self, fleet,
-                                                             capsys):
-        """**The limitation, pinned rather than described.**
+    def test_a_declaration_that_says_nothing_is_still_refused(self, fleet,
+                                                              capsys):
+        """`=` declares neither an old prefix nor a new one.
 
-        The referee allows `HMC0_=` (the prefix was dropped) and refuses
-        `=HMC0_` (the prefix was added). Aggregation appearing where there was
-        none is the common direction, and it is the one that cannot be said in a
-        single declaration. This test fails the day that changes upstream, which
-        is when the workaround above should be removed rather than kept out of
-        habit.
+        It is the spelling that LOOKS like the two legal forms, and it would
+        match every name while renaming nothing. Kept because lifting the
+        empty-OLD refusal is exactly the change that could have lifted this one
+        by accident.
+
+        **What used to be here** was a test asserting that an added prefix could
+        NOT be declared -- and it asserted that of THIS repository's parser,
+        which is a mirror of the referee's. Its docstring claimed it would fail
+        the day the refusal was lifted upstream. It could not: it never looked
+        upstream. `tests/test_seam.py::TestTheDialectsAgree` does, and it is
+        what catches the two parsers parting company in either direction.
         """
         store = self._shifted(fleet)
         code, captured = run(["drift", "--store", str(store.root),
                               "--unit", "h-0042",
-                              "--aggregation-prefix", "=HMC0_"], capsys)
+                              "--aggregation-prefix", "="], capsys)
         assert code == INCOMPLETE
-        assert "is not OLD=NEW" in captured.err
+        assert "declares no rename" in captured.err
 
     def test_a_declared_prefix_does_not_hide_a_real_disappearance(self, fleet,
                                                                   capsys):

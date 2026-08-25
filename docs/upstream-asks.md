@@ -1,8 +1,13 @@
-# What this layer cannot do through the referee's published surface
+# What this layer could not do, and what closed it
 
-**Four items, of two kinds.** Three are capabilities the specification asks for
-that no consumer of `bmc-sensor-audit 0.1.1` can reach (1-3). The fourth is a
-published surface that exists and cannot express the common case (4).
+**All four are FIXED, RELEASED and CONSUMED as of 2026-08-25.** They shipped in
+`bmc-sensor-audit 0.1.2`; this repository's floor moved to `>=0.1.2` and the
+workarounds below are gone from the code. The entries are kept because *what was
+missing and why it mattered* is the part that does not survive in a changelog.
+
+**Four items, of two kinds.** Three were capabilities no consumer of 0.1.1 could
+reach (1-3). The fourth was a published surface that existed and could not
+express the common case (4).
 
 They are recorded here rather than faked, because a collector that claimed
 conditional requests while walking every BMC on every pass would be lying in
@@ -124,25 +129,37 @@ They were written down here first, with the measurement attached, because a
 report that says *this does not work* and cannot say what was run is a report the
 maintainer has to re-derive before acting on it.
 
-**All four are FIXED UPSTREAM and NOT RELEASED** — `bmc-sensor-audit` commit
-`6511679`, closed 2026-08-25. This repository pins `>=0.1.1,<0.2`, and **0.1.1
-does not carry any of them**, so every workaround above stays exactly as it is
-until a release does.
+**All four FIXED and RELEASED in `bmc-sensor-audit 0.1.2`**, and consumed here:
+the floor is `>=0.1.2`, the collector passes `--password-env`, and an added
+prefix is declared in one entry.
 
-That is not a formality. `tests/test_scenarios.py::TestS5ThePrefixChange` still
-passes today *because* it is measured against the installed release rather than
-against upstream's master — and it is what will go red when this repository
-raises its floor to a version where the prefix limitation is gone. That red is
-the signal to delete the stem-by-stem workaround, not a regression.
+**The test that was supposed to notice could not, and that is the lesson worth
+keeping.** This file used to say the S5 scenario test would go red the day the
+prefix refusal was lifted upstream. It did not. That test asserted the refusal
+of **this repository's own parser** — a mirror of the referee's, which changes
+only when somebody changes it here. When 0.1.2 lifted the refusal, the two
+dialects silently parted and the whole suite stayed green: exactly the
+divergence the mirroring exists to prevent.
+
+**A claim about another program has to be measured against that program.**
+`tests/test_seam.py::TestTheDialectsAgree` now parses the same spellings with
+both parsers and compares the verdicts, so drift is caught in either direction.
+That is the check that should have existed on the first commit.
 
 Fix summary, as landed rather than as asked:
 
-| # | landed as |
-|---|---|
-| 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below |
-| 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` |
-| 4 | `--password-env NAME` and `--password-file PATH` |
-| 5 | an empty `OLD` now declares a prefix that was added |
+| # | landed as | used here |
+|---|---|---|
+| 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below | not yet — the collector still walks every pass |
+| 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` | not yet — `targets/1` has no field for either |
+| 4 | `--password-env NAME` and `--password-file PATH` | **yes** — no credential crosses argv |
+| 5 | an empty `OLD` declares a prefix that was added | **yes** — one entry, not one per stem |
+
+**Two of the four are available and not yet taken**, and saying so is the point
+of the column. `--etag-cache` needs a per-surface cache path in the store and a
+decision about where it lives; `--cafile`/`--pin-sha256` need fields in
+`targets/1` and a format bump. Both are worth doing and neither is done, which
+is a different sentence from *fixed*.
 
 **#2 was implemented differently from the request, and the reason matters here.**
 A per-resource conditional GET needs the previous BODY to use a 304, which means

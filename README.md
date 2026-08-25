@@ -6,7 +6,7 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.1.0**, tagged `v0.1.0`, Apache-2.0, on PyPI as
+**Released — 0.1.1**, tagged `v0.1.1`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
 
 ---
@@ -169,15 +169,15 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 200 |
-| of those, requiring `bmc-sensor-audit` | 14 |
+| tests collected | 210 |
+| of those, requiring `bmc-sensor-audit` | 22 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and
 the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Run it dependency-free and the 14 skip. Install the referee and they run.
+Run it dependency-free and the 22 skip. Install the referee and they run.
 
 **No pass/skip tally is quoted here on purpose.** The first version of this
 section did, and both numbers were wrong within a day — not because tests
@@ -196,14 +196,21 @@ a walk with the referee's own reader and asserts the fixture still matches.
 
 ## Upstream
 
-Pinned at `bmc-sensor-audit>=0.1.1,<0.2`, and the floor is **derived, not chosen**:
-this collector calls `validate-walk` and reads the handle from
-`capture --print-digest`, and neither exists before 0.1.1. Measured against every
-release in the range before the line was written.
+Pinned at `bmc-sensor-audit>=0.1.2,<0.2`, and the floor is **derived, not
+chosen**. It was `>=0.1.1` — enough for `validate-walk` and the handle from
+`capture --print-digest`. It moved because the collector now passes
+`--password-env`, so a credential never crosses argv, and declares an added
+aggregation prefix in one entry. Neither exists in 0.1.1.
 
-Three capabilities are **not reachable** through the referee's published surface
-and are recorded rather than faked — conditional requests, certificate pinning,
-and a password that does not cross argv. See [docs/upstream-asks.md](docs/upstream-asks.md).
+**Four gaps reported from here were fixed there**, and 0.1.2 is where they
+landed: conditional requests, certificate pinning, a password off argv, and a
+prefix that was *added* being declarable at all. Raising the floor is what turns
+them from a note into a capability. See
+[docs/upstream-asks.md](docs/upstream-asks.md).
+
+**None of the four was a bug.** Each was a surface that was never there — which
+a test suite cannot find, because it asks whether what exists is correct. Only a
+second program with a real job discovers that what it needed was missing.
 
 ## Licence
 

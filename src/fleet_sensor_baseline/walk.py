@@ -77,26 +77,33 @@ def _sensors(payload: Any) -> Iterable[dict]:
 def parse_prefix_map(pairs: Iterable[str]) -> dict[str, str]:
     """`OLD=NEW` strings into a mapping, refusing the ambiguous ones.
 
-    **Deliberately the referee's dialect, refusals included.** An empty NEW is
-    accepted and means the prefix was dropped; an empty OLD is refused. That
-    asymmetry is the referee's, and being MORE permissive here would be worse
-    than sharing the limit: an operator's declaration would work in one tool of
-    this family and be rejected by the next, which is how one rename comes to be
-    written twice and drift.
+    **Deliberately the referee's dialect, refusals included**, because an
+    operator's declaration has to mean the same thing in both tools. A rename
+    written twice is a rename that will drift.
 
-    The cost is real and is filed upstream rather than worked around: a prefix
-    being ADDED -- aggregation appearing where there was none, which is the
-    common direction -- has to be declared stem by stem (`Fan_=HMC0_Fan_`)
-    instead of once. See `docs/upstream-asks.md`.
+    An empty NEW means the prefix was dropped. An empty OLD means it was ADDED,
+    which is the direction aggregation actually goes when a satellite BMC
+    appears behind an aggregator. `=` alone declares neither and is refused.
+
+    **The empty OLD was refused here until 2026-08-25, mirroring a refusal
+    upstream that this repository asked to have lifted** (`bmc-sensor-audit` #5,
+    released in 0.1.2). Mirroring it was right; noticing that it had been lifted
+    was not automatic, and `tests/test_seam.py` now compares the two dialects
+    directly rather than asserting anything about upstream from this side.
     """
     mapping: dict[str, str] = {}
     for pair in pairs:
         old, sep, new = pair.partition("=")
-        if not sep or not old:
+        if not sep:
             raise WalkError(
                 f"--aggregation-prefix {pair!r} is not OLD=NEW. The old prefix "
                 f"is the one in the earlier capture; an empty new prefix is "
-                f"allowed and means the prefix was dropped")
+                f"allowed and means the prefix was dropped, and an empty OLD is "
+                f"allowed and means a prefix was added to every name")
+        if not old and not new:
+            raise WalkError(
+                f"--aggregation-prefix {pair!r} has neither an old nor a new "
+                f"prefix, so it declares no rename at all")
         if old in mapping and mapping[old] != new:
             raise WalkError(
                 f"{old!r} is declared as both {mapping[old]!r} and {new!r}; two "

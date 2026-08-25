@@ -32,7 +32,8 @@ import pytest
 
 from conftest import walk as fixture_walk
 from fleet_sensor_baseline.store import digest_bytes
-from fleet_sensor_baseline.walk import WALK_FORMAT, sensor_names, sensor_paths
+from fleet_sensor_baseline.walk import (WALK_FORMAT, WalkError, parse_prefix_map,
+                                        sensor_names, sensor_paths)
 
 #: Every test in this file needs the referee. The marker makes the count
 #: derivable by collection rather than by running a lane and reading its skips:
@@ -242,3 +243,62 @@ def test_the_pin_floor_still_resolves():
         f"validate-walk and capture --print-digest, neither of which exists "
         f"before 0.1.1")
     assert parts < (0, 2), f"bmc-sensor-audit {installed} is outside the pin"
+
+@NEEDS_TOOL
+class TestTheDialectsAgree:
+    """The two `OLD=NEW` parsers, compared against each other.
+
+    **This is the test that should have existed from the first commit.** There
+    was one asserting that an added prefix could NOT be declared -- and it
+    asserted it of THIS repository's parser, which is a mirror of upstream's and
+    changes only when somebody changes it here. Its docstring claimed it would
+    "fail the day it is lifted upstream". It could not: it never looked upstream.
+
+    When `bmc-sensor-audit` 0.1.2 lifted the refusal, this repository's copy went
+    on refusing and the whole suite stayed green, while the two dialects had
+    silently parted -- exactly the divergence the mirroring exists to prevent.
+    **A claim about another program has to be measured against that program.**
+    """
+
+    @staticmethod
+    def _referee(entry):
+        from bmc_sensor_audit.inventory.regression import parse_prefix_map
+        try:
+            return dict(parse_prefix_map([entry]))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _ours(entry):
+        try:
+            return parse_prefix_map([entry])
+        except WalkError:
+            return None
+
+    @pytest.mark.parametrize("entry", [
+        "HMC0_=GPU0_",   # a plain rename
+        "HMC0_=",        # the prefix was dropped
+        "=HMC0_",        # the prefix was ADDED -- lifted upstream in 0.1.2
+        "=",             # declares nothing
+        "nonsense",      # no separator
+        "",              # empty
+        "Fan_=HMC0_Fan_",
+    ])
+    def test_both_parsers_agree_on_every_spelling(self, entry):
+        _import_referee()
+        theirs, ours = self._referee(entry), self._ours(entry)
+        assert (theirs is None) == (ours is None), (
+            f"{entry!r}: the referee "
+            f"{'refuses' if theirs is None else 'accepts'} it and this layer "
+            f"{'refuses' if ours is None else 'accepts'} it. One declaration has "
+            f"to mean the same thing in both tools, or an operator writes the "
+            f"rename twice and the two copies drift")
+        if theirs is not None:
+            assert theirs == ours, f"{entry!r}: {theirs} vs {ours}"
+
+    def test_the_comparison_can_fail(self):
+        """Non-vacuity. If both parsers were replaced by ones that accepted
+        everything, every case above would agree and prove nothing."""
+        assert self._ours("=") is None, "this layer no longer refuses anything"
+        assert self._ours("=HMC0_") is not None, "this layer refuses everything"
+
