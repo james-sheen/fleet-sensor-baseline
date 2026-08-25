@@ -15,6 +15,6 @@ from __future__ import annotations
 # read this to decide whether the README may name a tag at all: an unreleased
 # tree that announces `v0.1.0` hands a reader a tag to check out that does not
 # exist. Bump this at step 1 of a release, not at step 9.
-__version__ = "0.0.0"
+__version__ = "0.1.0"
 
 __all__ = ["__version__"]

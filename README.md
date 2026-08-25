@@ -6,7 +6,8 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Status: Not yet released.** No index carries this name yet. Install from source.
+**Released — 0.1.0**, tagged `v0.1.0`, Apache-2.0, on PyPI as
+`fleet-sensor-baseline`.
 
 ---
 
@@ -26,9 +27,7 @@ is one unit against its cohort.
 ## Install
 
 ```
-git clone https://github.com/james-sheen/fleet-sensor-baseline
-cd fleet-sensor-baseline
-pip install -e .
+pip install fleet-sensor-baseline
 ```
 
 The core has **no dependencies**. Ingest, baseline, outliers, drift, verdict and
@@ -36,7 +35,7 @@ validate are JSON and arithmetic, so the vertical and horizontal axes run on a j
 host with nothing provisioned. The collector needs the referee on PATH:
 
 ```
-pip install -e ".[collect]"
+pip install "fleet-sensor-baseline[collect]"
 ```
 
 ## Use
