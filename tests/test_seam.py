@@ -302,3 +302,110 @@ class TestTheDialectsAgree:
         assert self._ours("=") is None, "this layer no longer refuses anything"
         assert self._ours("=HMC0_") is not None, "this layer refuses everything"
 
+@NEEDS_TOOL
+class TestTheEtagSkipIsDetectedAgainstTheRealTool:
+    """The collector asking the real `capture` whether a walk is needed.
+
+    **This is the test the feature actually rests on.** The referee announces a
+    skip in PROSE -- it exits 0 like a walk and writes no file like a failure --
+    so the backend tells them apart by matching a printed line. A line is a
+    weaker contract than an exit code, and the only way to know it still holds
+    is to run the real command and look.
+    """
+
+    def _rack(self, tmp_path, machine, unchanged_ok=True):
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            subprocess_backend
+        from fleet_sensor_baseline.collect.collector import Collector, Target
+        from fleet_sensor_baseline.store import Store
+        from bmc_sensor_audit.testing.mock_redfish import serve
+
+        store = Store(tmp_path / "store")
+        store.initialise()
+        with serve(machine) as base_url:
+            def run(when):
+                collector = Collector(subprocess_backend(), store,
+                                      collector_id="rack-17", attempts=1,
+                                      sleep=lambda _: None, etag_cache=True,
+                                      clock=lambda: when)
+                records = collector.run([Target(unit_key="h-0042",
+                                                base_url=base_url)])
+                store.append(records)
+                return records[0]
+            first = run("2026-08-21T00:00:00Z")
+            second = run("2026-08-22T00:00:00Z")
+        return store, first, second
+
+    def _machine(self, etags=True):
+        _import_referee()
+        from bmc_sensor_audit.testing.mock_redfish import MockBMC
+        machine = MockBMC(etags=etags)
+        for name in ("Fan_CPU_1", "Fan_CPU_2", "Inlet_Temp"):
+            machine.add(name)
+        return machine
+
+    def test_the_first_walk_records_a_payload(self, tmp_path):
+        store, first, _ = self._rack(tmp_path, self._machine())
+        assert first["exit_code"] == 0
+        assert "unchanged" not in first
+        assert json.loads(store.payload(first))["sensors"]
+
+    def test_the_second_run_is_skipped_and_reuses_it(self, tmp_path):
+        """The whole loop, against the published tool: cache written, BMC asked,
+        walk skipped, record filed pointing at the earlier capture."""
+        store, first, second = self._rack(tmp_path, self._machine())
+        assert second["exit_code"] == 0, second
+        assert second["unchanged"]["proves"] == "membership"
+        assert second["payload_digest"] == first["payload_digest"]
+        assert second["unchanged"]["reused_from"] == first["captured_at"]
+
+    def test_the_cache_file_is_the_referees_own_format(self, tmp_path):
+        """Written by the referee, read by the referee. This layer only chooses
+        WHERE it goes, and must not start parsing it."""
+        from bmc_sensor_audit.inventory.redfish import ETAG_CACHE_FORMAT
+        store, _, _ = self._rack(tmp_path, self._machine())
+        caches = sorted((store.root / "etags").glob("*.json"))
+        assert len(caches) == 1, caches
+        assert json.loads(caches[0].read_text())["format"] == ETAG_CACHE_FORMAT
+
+    def test_a_changed_set_is_walked_rather_than_skipped(self, tmp_path):
+        """Non-vacuity, and the failure that would matter most: a sensor that
+        vanished must not be skipped past."""
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            subprocess_backend
+        from fleet_sensor_baseline.collect.collector import Collector, Target
+        from fleet_sensor_baseline.store import Store
+        from bmc_sensor_audit.testing.mock_redfish import serve
+
+        machine = self._machine()
+        store = Store(tmp_path / "store")
+        store.initialise()
+        with serve(machine) as base_url:
+            collector = Collector(subprocess_backend(), store,
+                                  collector_id="r", attempts=1,
+                                  sleep=lambda _: None, etag_cache=True,
+                                  clock=lambda: "2026-08-21T00:00:00Z")
+            store.append(collector.run([Target(unit_key="h", base_url=base_url)]))
+        machine.remove("Fan_CPU_2")
+        with serve(machine) as base_url:
+            collector = Collector(subprocess_backend(), store,
+                                  collector_id="r", attempts=1,
+                                  sleep=lambda _: None, etag_cache=True,
+                                  clock=lambda: "2026-08-22T00:00:00Z")
+            second = collector.run([Target(unit_key="h", base_url=base_url)])[0]
+        assert "unchanged" not in second, "a removed sensor was skipped past"
+        assert len(json.loads(store.payload(second))["sensors"]) == 2
+
+    def test_a_bmc_without_etags_is_walked_every_time(self, tmp_path):
+        """*Cannot tell* must never be read as *unchanged*. A BMC that ignores
+        the header would otherwise never be walked again."""
+        _, first, second = self._rack(tmp_path, self._machine(etags=False))
+        assert "unchanged" not in second
+
+        # **And the digests DIFFER, which is the finding this assertion was
+        # written wrongly to expect.** A `walk/1` carries per-fetch latencies, so
+        # two walks of one unchanged machine never share a digest. The content
+        # store therefore never collapses a homogeneous fleet -- a claim this
+        # repository made in three places until it was measured.
+        assert second["payload_digest"] != first["payload_digest"]
+

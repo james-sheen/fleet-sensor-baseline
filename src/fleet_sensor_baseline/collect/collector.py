@@ -8,25 +8,30 @@ in this layer's own envelopes.
 
 ## What this collector does not do, and why saying so matters
 
-Two capabilities in the specification are **not reachable through the referee's
-published surface**, and both are recorded here rather than faked:
+One capability in the specification is still **not reachable through the
+referee's published surface**, and one that was has since been closed:
 
-- **Conditional requests (ETag).** `bmc-sensor-audit capture` exposes no
-  `If-None-Match`, so a collector cannot ask a BMC *has this changed*. What is
-  implemented instead is digest deduplication: an unchanged walk stores no new
-  object and its record points at the one already there. That saves storage and
-  saves nothing on the wire, and the difference is real -- the BMC is still
-  walked. Closing it needs an upstream surface, not a workaround here.
+- ~~**Conditional requests (ETag).**~~ **Closed in `bmc-sensor-audit` 0.1.2 and
+  used here.** With `--etag-cache`, the referee asks the BMC whether its sensor
+  SET changed and skips the walk when it has not: a handful of requests instead
+  of one per sensor. See `Collector(etag_cache=True)`.
+
+  **It proves membership, and this collector must not claim more.** A record
+  filed from a skip reuses the previous capture's payload, which is exactly
+  right for the name-set questions this layer asks and would be wrong for a
+  threshold audit. The record says so, in an `unchanged` block naming the basis.
+
+  **The skip is announced in PROSE, not in an exit code** -- it exits 0, like a
+  walk, and writes no file, like a failure. The backend reads the printed line
+  to tell them apart. That is a real seam and it is filed upstream rather than
+  hidden: a machine-readable signal would be a better contract.
 - **Pinned-certificate reads toward BMCs.** The referee's only TLS control is
   `--insecure`. A collector that wants certificate pinning cannot express it,
   so this one does not claim to.
 
-A third is a hazard rather than a gap: `capture` takes `--password` **in
-argv**, where `ps` can read it on a shared host. This collector never puts a
-password in a targets file -- it takes the NAME of an environment variable and
-reads the value at the moment of the call -- but the value still crosses argv
-on the way to the subprocess, and no amount of care on this side changes that.
-All three are filed for upstream in `docs/upstream-asks.md`.
+~~A third is a hazard rather than a gap~~ -- also closed in 0.1.2: the
+credential is passed as `--password-env NAME` and the value never enters argv.
+All of them are recorded in `docs/upstream-asks.md`, fixed and open alike.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from typing import Any, Callable, Iterable, Protocol, Sequence
 
 from ..exits import CLEAN, INCOMPLETE, normalise
 from ..formats import RECORD_FORMAT, validate_targets
-from ..store import Store, digest_bytes, ref_for
+from ..store import Store, digest_bytes, ref_for, surface_of
 
 
 class CollectError(Exception):
@@ -85,12 +90,28 @@ class Capture:
     #: the digest computed here so the two can be compared -- see `Collector`.
     reported_digest: str | None = None
     raw_exit_code: int | None = None
+    #: The BMC said its sensor SET is unchanged, so no walk happened and there
+    #: is no payload. Distinct from a clean capture with no payload, which is a
+    #: tool that claimed success and produced nothing.
+    unchanged: bool = False
 
 
 class Backend(Protocol):
-    """How a collector reaches a BMC. Subprocess in production, mock in tests."""
+    """How a collector reaches a BMC. Subprocess in production, mock in tests.
 
-    def capture(self, target: Target) -> Capture:  # pragma: no cover - protocol
+    `etag_cache` is where the referee should keep this surface's collection
+    ETags. It is a parameter rather than a field on `Target` because it is a
+    fact about THIS STORE, not about the rack: the same targets file pointed at
+    two stores has two caches, and a rack list committed to version control
+    should not name a path on one operator's disk.
+
+    **It is optional, and a backend that omits it still works.** The collector
+    passes it only when ETag caching is on, so an implementation written before
+    the parameter existed is unaffected until somebody enables the feature.
+    """
+
+    def capture(self, target: Target,
+                etag_cache: str | None = None) -> Capture:  # pragma: no cover
         ...
 
 
@@ -113,6 +134,17 @@ def read_targets(payload: Any) -> list[Target]:
     return out
 
 
+#: `captured_at` has one-second resolution, so two `collect` runs inside one
+#: second file records with the SAME `(surface, captured_at)` key. The store
+#: tolerates it -- append-only keeps both lines and latest-wins answers with the
+#: newer -- but note that `ingest` REFUSES that shape from files while `collect`
+#: creates it directly. **`--etag-cache` makes it likelier rather than causing
+#: it**: a skipped surface returns in milliseconds where a walk took seconds.
+#: Left as it is deliberately: adding sub-second precision would mix two
+#: timestamp spellings in one store, and `2026-01-01T00:00:00.5Z` sorts BEFORE
+#: `2026-01-01T00:00:00Z` as text, which would silently reorder history.
+
+
 class Collector:
     """Walks targets serially, with backoff, and files what it finds."""
 
@@ -120,7 +152,7 @@ class Collector:
                  attempts: int = 3, base_delay: float = 1.0,
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], str] | None = None,
-                 trigger: str = "scheduled") -> None:
+                 trigger: str = "scheduled", etag_cache: bool = False) -> None:
         if attempts < 1:
             raise CollectError("attempts must be at least 1")
         self.backend = backend
@@ -131,6 +163,11 @@ class Collector:
         self.sleep = sleep
         self.trigger = trigger
         self._clock = clock or _utc_now
+        self.etag_cache = etag_cache
+        #: Newest record carrying a payload, per surface. Read ONCE: nothing
+        #: appends to the store during a run, and re-reading per target would be
+        #: quadratic on a rack.
+        self._previous: dict[tuple[str, ...], dict] | None = None
         #: Walk order, recorded so a test can assert serialization rather than
         #: assert that a thread pool was not imported.
         self.order: list[str] = []
@@ -138,10 +175,36 @@ class Collector:
     def run(self, targets: Sequence[Target]) -> list[dict]:
         return [self.walk(target) for target in targets]
 
+    def _last_payload(self, surface: tuple[str, ...]) -> dict | None:
+        if self._previous is None:
+            newest: dict[tuple[str, ...], dict] = {}
+            try:
+                records = self.store.read_all()
+            except Exception:  # noqa: BLE001 - an unreadable index is not fatal
+                records = []
+            for stored in records:
+                record = stored.record
+                if not record.get("payload_digest"):
+                    continue
+                key = surface_of(record)
+                current = newest.get(key)
+                if current is None or record.get("captured_at", "") >= current.get(
+                        "captured_at", ""):
+                    newest[key] = record
+            self._previous = newest
+        return self._previous.get(surface)
+
     def walk(self, target: Target) -> dict:
         """One target, with backoff, always producing exactly one record."""
         self.order.append(target.unit_key)
-        capture = self._attempt(target)
+        surface = surface_of({"unit_key": target.unit_key,
+                              "topology": dict(target.topology)})
+        cache = None
+        if self.etag_cache:
+            path = self.store.etag_path(surface)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            cache = str(path)
+        capture = self._attempt(target, cache)
         captured_at = self._clock()
 
         record: dict[str, Any] = {
@@ -160,6 +223,32 @@ class Collector:
             record["detail"] = capture.detail
         if capture.raw_exit_code is not None:
             record["raw_exit_code"] = capture.raw_exit_code
+
+        if capture.unchanged:
+            previous = self._last_payload(surface)
+            if previous is None:
+                # The referee had a cache and this store has no capture to point
+                # at. Somebody deleted records, or pointed two stores at one
+                # cache. Either way there is nothing to reuse and inventing a
+                # clean record would assert a payload that does not exist.
+                record["exit_code"] = INCOMPLETE
+                record["detail"] = (
+                    "the BMC reports its sensor set unchanged and this store "
+                    "holds no earlier capture to reuse; delete the etag cache "
+                    "for this surface to force a full walk")
+                return record
+            record["payload_digest"] = previous["payload_digest"]
+            record["walk_ref"] = previous["walk_ref"]
+            # **What was proven, and by what.** The collection ETags say the
+            # membership is the same. They say nothing about a threshold edited
+            # on a sensor that stayed present, and a reader of this record has
+            # to be able to tell which question it answers.
+            record["unchanged"] = {
+                "basis": "collection-etag",
+                "proves": "membership",
+                "reused_from": previous.get("captured_at"),
+            }
+            return record
 
         if capture.exit_code == CLEAN and capture.raw is not None:
             computed = digest_bytes(capture.raw)
@@ -185,11 +274,19 @@ class Collector:
                                 "its walk is a claim, not a record")
         return record
 
-    def _attempt(self, target: Target) -> Capture:
+    def _attempt(self, target: Target,
+                 etag_cache: str | None = None) -> Capture:
         last = Capture(INCOMPLETE, detail="no attempt was made")
         for attempt in range(1, self.attempts + 1):
             try:
-                last = self.backend.capture(target)
+                # **Passed only when there is one.** The parameter was added
+                # for `--etag-cache`, which is opt-in; a backend written against
+                # the earlier protocol keeps working untouched while the feature
+                # is off, and fails loudly the moment somebody turns it on --
+                # which is the right time to find out, rather than breaking
+                # every existing backend for a feature they did not ask for.
+                last = (self.backend.capture(target) if etag_cache is None
+                        else self.backend.capture(target, etag_cache))
             except CollectError as exc:
                 last = Capture(INCOMPLETE, detail=str(exc))
             except Exception as exc:  # noqa: BLE001 - a backend must not kill a run

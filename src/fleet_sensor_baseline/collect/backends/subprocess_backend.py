@@ -31,6 +31,12 @@ from ..collector import Capture, CollectError, Target, normalise_capture
 #: the contract.
 DIGEST_LINE = re.compile(r"\bdigest\s+(sha256:[0-9a-f]{64})\b")
 
+#: How the referee announces that it did not walk. **Matched as prose, because
+#: prose is the only signal it gives**: the skip exits 0, like a walk. Anchored
+#: on the two words that carry the meaning rather than the whole sentence, which
+#: also names a timestamp and a count.
+UNCHANGED_LINE = re.compile(r"\bsensor set unchanged\b")
+
 DEFAULT_COMMAND = ("bmc-sensor-audit",)
 
 
@@ -43,12 +49,14 @@ class SubprocessBackend:
         #: needing the tool installed. The default is the real thing.
         self.runner = runner or _run
 
-    def capture(self, target: Target) -> Capture:
+    def capture(self, target: Target, etag_cache: str | None = None) -> Capture:
         with tempfile.TemporaryDirectory(prefix="fsb-capture-") as tmp:
             out = Path(tmp) / "walk.json"
             argv = list(self.command) + [
                 "capture", "--target", target.base_url,
                 "--out", str(out), "--print-digest"]
+            if etag_cache is not None:
+                argv += ["--etag-cache", etag_cache]
             if target.username:
                 argv += ["--username", target.username]
             if target.password_env is not None:
@@ -78,10 +86,20 @@ class SubprocessBackend:
             found = DIGEST_LINE.search(completed.stdout or "")
             if found:
                 capture.reported_digest = found.group(1)
+            if capture.exit_code == CLEAN and not out.is_file():
+                # **A skip and a silent failure look identical from here**: exit
+                # 0 and no file, because the out path is a fresh temporary
+                # directory every call. The referee distinguishes them only in
+                # prose, so this reads the prose -- and says so rather than
+                # pretending the signal is structural. Filed upstream; see the
+                # module docstring in `collect/collector.py`.
+                if UNCHANGED_LINE.search(completed.stdout or ""):
+                    return Capture(CLEAN, unchanged=True,
+                                   detail="the BMC reports its sensor set "
+                                          "unchanged; not re-walked")
+                return Capture(
+                    2, detail=f"the tool exited 0 and wrote no file at {out}")
             if capture.exit_code == CLEAN:
-                if not out.is_file():
-                    return Capture(
-                        2, detail=f"the tool exited 0 and wrote no file at {out}")
                 capture.raw = out.read_bytes()
             return capture
 

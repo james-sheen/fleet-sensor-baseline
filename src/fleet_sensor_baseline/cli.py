@@ -417,7 +417,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
 
     collector = Collector(backend, store, collector_id=args.collector_id,
                           attempts=args.attempts, base_delay=args.base_delay,
-                          trigger=args.trigger)
+                          trigger=args.trigger, etag_cache=args.etag_cache)
     try:
         records = collector.run(targets)
     except CollectError as exc:
@@ -430,6 +430,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             "".join(json.dumps(r, sort_keys=True) + "\n" for r in records),
             encoding="utf-8")
 
+    skipped = sum(1 for r in records if r.get("unchanged"))
+    if args.etag_cache:
+        print(f"collect: {skipped} of {len(records)} surface(s) reported their "
+              f"sensor set unchanged and were not walked")
     rows = [{"unit_key": r["unit_key"], "exit_code": r.get("exit_code", CLEAN),
              "detail": r.get("detail", "")} for r in records]
     payload = summary(rows)
@@ -541,6 +545,12 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--attempts", type=int, default=3)
     collect.add_argument("--base-delay", type=float, default=1.0)
     collect.add_argument("--trigger", default="scheduled")
+    collect.add_argument("--etag-cache", action="store_true",
+                         help="ask each BMC whether its sensor SET changed "
+                              "before walking it, keeping one cache per surface "
+                              "in the store. Membership only: a record filed "
+                              "from a skip reuses the previous capture and says "
+                              "so. Needs bmc-sensor-audit>=0.1.2")
     collect.set_defaults(func=_cmd_collect)
 
     return parser

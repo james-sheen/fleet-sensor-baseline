@@ -7,9 +7,21 @@ the JSONL index *is* the time series here. Revisit when cross-month aggregation
 queries exist and are slow -- measured on real volumes, not assumed from the
 word *fleet*.
 
-**Homogeneous fleets make the content store collapse hard.** Two thousand
-identical trays store one object and two thousand references, which is why the
-payloads live behind digests rather than beside the records.
+**The content store does NOT collapse a homogeneous fleet, and this docstring
+used to say it did.** Measured 2026-08-25: two walks of one unchanged machine
+produce different bytes, because `walk/1` carries a `latencies` array of
+per-fetch timings and a `captured_at`. Neither is ever the same twice, so no two
+captures ever share a digest -- across time or across identical trays.
+
+The claim was plausible, written from the shape of a content-addressed store
+rather than from a measurement of what goes into one, and nothing checked it.
+`tests/test_store.py` now pins the real behaviour.
+
+Payloads still live behind digests, for the reasons that survive: a digest is a
+handle the referee also prints, a record can name a capture without embedding
+it, and a corrupted object is detectable. **Deduplication is not among them.**
+What actually avoids re-storing an unchanged walk is not walking it --
+`collect --etag-cache`, which asks the BMC first.
 """
 
 from __future__ import annotations
@@ -17,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -25,6 +38,7 @@ from .formats import RECORD_FORMAT, validate_record
 
 RECORDS = "records.jsonl"
 CAS = "cas"
+ETAGS = "etags"
 
 
 class StoreError(Exception):
@@ -90,8 +104,31 @@ class Store:
         algorithm, _, hexdigest = digest.partition(":")
         return self.root / CAS / algorithm / hexdigest
 
+    def etag_path(self, record_or_surface) -> Path:
+        """Where the referee's ETag cache for ONE BMC surface lives.
+
+        **One cache per surface, not per unit.** `capture --etag-cache` holds the
+        collection ETags of a single Redfish tree. A machine that answers on a
+        host BMC and an HMC has two trees and two sets of collections; pointing
+        both at one file would make each walk invalidate the other's cache and
+        the feature would quietly do nothing.
+
+        The name is a readable slug plus a short digest of the exact surface.
+        The slug is for whoever has to look in this directory at three in the
+        morning; the digest is what makes it unambiguous, because `unit_key` is
+        opaque operator naming and may contain anything at all -- including the
+        separator the slug uses.
+        """
+        surface = (record_or_surface if isinstance(record_or_surface, tuple)
+                   else surface_of(record_or_surface))
+        joined = "\u0000".join(surface)
+        digest = hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+        slug = re.sub(r"[^A-Za-z0-9._=-]+", "-", "--".join(surface)).strip("-")
+        return self.root / ETAGS / f"{slug[:80]}-{digest}.json"
+
     def initialise(self) -> None:
         (self.root / CAS / "sha256").mkdir(parents=True, exist_ok=True)
+        (self.root / ETAGS).mkdir(parents=True, exist_ok=True)
         self.index_path.touch()
 
     # -- reading ---------------------------------------------------------

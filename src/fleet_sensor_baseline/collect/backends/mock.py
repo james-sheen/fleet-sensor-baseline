@@ -37,19 +37,31 @@ class MockRackBackend:
     def __init__(self, machines: dict[str, Any], *,
                  failures: Failures | None = None,
                  slow: dict[str, float] | None = None,
-                 sleep: Callable[[float], None] | None = None) -> None:
+                 sleep: Callable[[float], None] | None = None,
+                 unchanged: set | None = None) -> None:
         self.machines = machines
         self.failures = failures or {}
         self.slow = slow or {}
         self.sleep = sleep
+        #: Surfaces whose BMC answers *set unchanged* when asked with a cache.
+        self.unchanged = unchanged or set()
+        self.caches: list[str | None] = []
         #: Every capture attempted, in order. The evidence a test uses to assert
         #: the run was serialized -- an assertion about observed order, not
         #: about which concurrency library was imported.
         self.calls: list[str] = []
 
-    def capture(self, target: Target) -> Capture:
+    def capture(self, target: Target, etag_cache: str | None = None) -> Capture:
         key = _surface_key(target)
         self.calls.append(key)
+        #: Every cache path this backend was handed, so a test can assert the
+        #: paths are PER SURFACE rather than shared -- which is the whole reason
+        #: the store derives one per surface.
+        self.caches.append(etag_cache)
+        if etag_cache is not None and key in self.unchanged:
+            return Capture(CLEAN, unchanged=True,
+                           detail="the BMC reports its sensor set unchanged; "
+                                  "not re-walked")
 
         delay = self.slow.get(key)
         if delay and self.sleep:

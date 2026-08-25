@@ -126,9 +126,17 @@ def validate_record(payload: Any) -> list[str]:
         if not isinstance(payload.get("walk_ref"), str):
             problems.append("a record with exit_code 0 carries no 'walk_ref'")
 
-    for key in ("firmware", "collector"):
+    for key in ("firmware", "collector", "unchanged"):
         if key in payload and not isinstance(payload[key], dict):
             problems.append(f"{key!r} is present and is not an object")
+    unchanged = payload.get("unchanged")
+    if isinstance(unchanged, dict) and not unchanged.get("proves"):
+        # A record that reused an earlier payload has to say what was actually
+        # established. Without it a reader cannot tell a re-walk from a skip,
+        # and the two answer different questions.
+        problems.append("'unchanged' is present and does not say what it "
+                        "'proves'; a reused payload without a basis is a "
+                        "capture claiming more than was checked")
     if "trigger" in payload and not isinstance(payload["trigger"], str):
         problems.append("'trigger' is present and is not a string")
     return problems

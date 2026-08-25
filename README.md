@@ -63,6 +63,26 @@ fleet-sensor-baseline collect --targets rack-17.json --store fleet-store \
     --collector-id rack-17
 ```
 
+### Asking before walking
+
+```
+fleet-sensor-baseline collect --targets rack-17.json --store fleet-store \
+    --collector-id rack-17 --etag-cache
+```
+
+The referee keeps one collection-ETag cache per BMC **surface** in the store and
+asks each machine whether its sensor set changed before walking it — a handful of
+requests instead of one per sensor.
+
+**It proves membership, and a record filed from a skip says so.** The record
+reuses the previous capture's payload and carries
+`{"basis": "collection-etag", "proves": "membership"}`. That is exactly what
+`drift`, `outliers` and `verdict` need, since all three read the name set; it is
+not enough for a threshold audit, and the record is explicit rather than looking
+like a fresh walk. A BMC that does not implement ETags is walked every time.
+
+Needs `bmc-sensor-audit>=0.1.2`.
+
 `collect` is the only subcommand that needs the referee on PATH. It walks one
 BMC at a time with exponential backoff, because AST2600-class BMCs measure a
 Redfish walk in seconds and a central plane that fans out to ten thousand of
@@ -140,8 +160,10 @@ See [docs/formats.md](docs/formats.md).
 
 An append-only JSONL index and a content-addressed store. Corrections are new
 lines, never edits; the reader takes the latest per surface and capture time.
-Homogeneous fleets make the content store collapse hard — two thousand identical
-trays store one object and two thousand references.
+**The store does not deduplicate captures, and an earlier version of this line
+said it did.** A `walk/1` carries per-fetch latencies and a capture time, so two
+walks of one unchanged machine never share a digest. What avoids re-storing an
+unchanged walk is not walking it — see `collect --etag-cache` below.
 
 **No time-series database in 0.x**, and that is a measurement rather than a
 preference: configuration drift is per-boot and per-firmware-event, not
@@ -169,15 +191,15 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 210 |
-| of those, requiring `bmc-sensor-audit` | 22 |
+| tests collected | 229 |
+| of those, requiring `bmc-sensor-audit` | 27 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and
 the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Run it dependency-free and the 22 skip. Install the referee and they run.
+Run it dependency-free and the 27 skip. Install the referee and they run.
 
 **No pass/skip tally is quoted here on purpose.** The first version of this
 section did, and both numbers were wrong within a day — not because tests

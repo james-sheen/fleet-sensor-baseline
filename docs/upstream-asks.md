@@ -28,10 +28,13 @@ would close it upstream.
 honors them* — so a collector on a weekly sweep over ten thousand BMCs does not
 re-walk machines that have not changed.
 
-**What this repository does instead.** Digest deduplication. A walk whose bytes
-are already in the content store writes no new object and its record points at
-the existing one. That saves storage — which on a homogeneous fleet is most of
-the cost — and **saves nothing on the wire**. The BMC is still walked.
+**What this repository did instead, and why it was worth less than claimed.**
+Digest deduplication: a walk whose bytes are already stored writes no new object.
+It saved nothing on the wire — the BMC was still walked — and **measurement later
+showed it saved nothing on disk either.** A `walk/1` carries per-fetch latencies
+and a capture time, so two walks of one unchanged machine never share a digest
+and the store never collapses. The workaround was weaker than the sentence
+describing it, which is the shape of workaround worth being suspicious of.
 
 The difference is not cosmetic. AST2600-class BMCs measure a Redfish walk in
 seconds, and the walk itself is the load this collector is serialized and backed
@@ -150,16 +153,23 @@ Fix summary, as landed rather than as asked:
 
 | # | landed as | used here |
 |---|---|---|
-| 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below | not yet — the collector still walks every pass |
+| 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below | **yes** — `collect --etag-cache`, one cache per surface |
 | 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` | not yet — `targets/1` has no field for either |
 | 4 | `--password-env NAME` and `--password-file PATH` | **yes** — no credential crosses argv |
 | 5 | an empty `OLD` declares a prefix that was added | **yes** — one entry, not one per stem |
 
-**Two of the four are available and not yet taken**, and saying so is the point
-of the column. `--etag-cache` needs a per-surface cache path in the store and a
-decision about where it lives; `--cafile`/`--pin-sha256` need fields in
-`targets/1` and a format bump. Both are worth doing and neither is done, which
-is a different sentence from *fixed*.
+**Three of four taken; one still available and not taken.** `--cafile` and
+`--pin-sha256` need fields in `targets/1` and a format bump, plus a decision
+about whether a certificate pin belongs in a rack list that lives in version
+control or in a sidecar the way the password already does. Not done is a
+different sentence from *fixed*.
+
+**Taking #2 immediately paid for itself twice.** It exposed that the referee
+announces a skip only in PROSE -- exit 0 like a walk, no file like a failure --
+so the backend has to match a printed line; a machine-readable signal would be a
+better contract, and that is a new upstream ask. And a test assertion written
+expecting the old digest-dedup behaviour failed, which is how the *store
+collapses a homogeneous fleet* claim was finally measured and found false.
 
 **#2 was implemented differently from the request, and the reason matters here.**
 A per-resource conditional GET needs the previous BODY to use a 304, which means

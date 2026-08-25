@@ -33,8 +33,14 @@ class TestContentAddressing:
         digest = store.put_payload(raw)
         assert store.cas_path(digest).read_bytes() == raw
 
-    def test_two_identical_walks_store_one_object(self, tmp_path):
-        """The property that makes a homogeneous fleet affordable."""
+    def test_byte_identical_input_stores_one_object(self, tmp_path):
+        """Content addressing is idempotent -- **and that is all this shows.**
+
+        The docstring here used to say *the property that makes a homogeneous
+        fleet affordable*, which was the same false claim the module carried:
+        real walks are never byte-identical, so this property never fires on
+        captures. See `TestTheStoreDoesNotDeduplicateCaptures` below.
+        """
         store = Store(tmp_path)
         store.initialise()
         raw = json.dumps(walk(["Fan_CPU_1"]), sort_keys=True).encode()
@@ -188,3 +194,45 @@ class TestIngestRefusals:
         assert code == INCOMPLETE
         out = capsys.readouterr().out
         assert "b.json" in out and "stored 1 record" in out
+
+
+class TestTheStoreDoesNotDeduplicateCaptures:
+    """The claim three documents made, pinned to what actually happens.
+
+    `store.py` said a homogeneous fleet collapses to one object. It does not: a
+    `walk/1` carries a `latencies` array of per-fetch timings and a
+    `captured_at`, so two walks of one unchanged machine never share a digest --
+    across time, or across two identical trays.
+
+    The claim was written from the shape of a content-addressed store rather
+    than from a measurement of what goes into one, and it survived until a test
+    assertion was written expecting it and failed.
+    """
+
+    def test_two_walks_of_one_machine_do_not_share_a_digest(self, tmp_path):
+        store = Store(tmp_path)
+        store.initialise()
+        names = ["Fan_1", "Fan_2"]
+        first = walk(names, captured_at="2026-08-21T00:00:00Z")
+        second = walk(names, captured_at="2026-08-22T00:00:00Z")
+        one = store.put_payload(json.dumps(first, sort_keys=True).encode())
+        two = store.put_payload(json.dumps(second, sort_keys=True).encode())
+        assert one != two
+        assert len(list((tmp_path / "cas" / "sha256").iterdir())) == 2
+
+    def test_byte_identical_input_still_stores_once(self, tmp_path):
+        """The property the store DOES have. Content addressing is idempotent;
+        it is the walks that are never identical, not the store that fails to
+        notice when they are."""
+        store = Store(tmp_path)
+        store.initialise()
+        raw = json.dumps(walk(["Fan_1"]), sort_keys=True).encode()
+        assert store.put_payload(raw) == store.put_payload(raw)
+        assert len(list((tmp_path / "cas" / "sha256").iterdir())) == 1
+
+    def test_the_docstring_no_longer_claims_a_collapse(self):
+        """A negative claim needs a guard, or the sentence creeps back in the
+        next time somebody describes a content-addressed store from memory."""
+        import fleet_sensor_baseline.store as module
+        assert "collapse hard" not in (module.__doc__ or "")
+        assert "does NOT collapse" in (module.__doc__ or "")
