@@ -1,0 +1,559 @@
+"""The command surface. Every subcommand answers in the same exit vocabulary.
+
+    0  clean   1  findings   2  could-not-complete
+
+**`2` is printed, never omitted.** *"N units could not be walked"* is the
+sentence this whole layer exists to keep sayable: a fleet report that renders
+incompleteness as silence is a fleet report that renders a dead collector as a
+clean rack.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any, Iterable
+
+from . import __version__
+from .baseline import (BaselineError, DEFAULT_FLOOR, DEFAULT_THRESHOLD, derive,
+                       expected_names, latest_per_unit, select)
+from .drift import steps
+from .exits import CLEAN, FINDINGS, INCOMPLETE, worst
+from .formats import (BASELINE_FORMAT, RECORD_FORMAT, validate_any,
+                      validate_record)
+from .outliers import compare
+from .report import baseline_preamble, render, summary
+from .store import (Store, StoreError, digest_bytes, iter_json, key_of,
+                    ref_for, surface_of)
+from .verdict import VerdictError, assess, read_expectations
+from .walk import WalkError, parse_prefix_map, sensor_names, sensor_paths
+
+
+def _load(path: str) -> Any:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _emit(payload: dict, title: str, args: argparse.Namespace,
+          preamble: Iterable[str] = ()) -> int:
+    for line in preamble:
+        print(line)
+    print(render(payload, title=title))
+    if getattr(args, "json", None):
+        Path(args.json).write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
+        print(f"  wrote {args.json}")
+    return payload["exit_code"]
+
+
+def _in_scope(records: list[dict], since: str | None, at: str | None) -> list[dict]:
+    """Records inside a declared time window. Both bounds are inclusive.
+
+    String comparison on ISO-8601 timestamps, which orders correctly for the
+    `...Z` form this layer writes. A record with a differently-shaped timestamp
+    is not silently reordered -- it sorts where its text puts it, and the format
+    validator is what keeps the field a string in the first place.
+    """
+    out = records
+    if since is not None:
+        out = [r for r in out if r.get("captured_at", "") >= since]
+    if at is not None:
+        out = [r for r in out if r.get("captured_at", "") <= at]
+    return out
+
+
+# -- ingest ---------------------------------------------------------------
+
+def _cmd_ingest(args: argparse.Namespace) -> int:
+    """Validate, verify digests, refuse duplicates, store.
+
+    **A duplicate is refused and a correction is declared.** The store is
+    append-only and the reader takes the latest line per surface-and-time, so
+    the file format supports corrections by construction. What it must not
+    support is an ACCIDENTAL second answer to one question: that is a harness
+    that cannot say which run it describes. `--correct` is the operator writing
+    down *this line supersedes that one*, which is a decision on the record;
+    silence is not.
+    """
+    store = Store(args.store)
+    store.initialise()
+    try:
+        existing = store.existing_keys()
+    except StoreError as exc:
+        print(f"the index could not be read: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    accepted: list[dict] = []
+    problems: list[str] = []
+    seen_here: set[tuple[str, ...]] = set()
+
+    try:
+        loaded = list(iter_json(args.records))
+    except StoreError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    for path, payload in loaded:
+        found = validate_record(payload)
+        if found:
+            problems.append(f"{path}: " + "; ".join(found))
+            continue
+        key = key_of(payload)
+        if key in seen_here:
+            problems.append(f"{path}: repeats a record already in this batch "
+                            f"({' '.join(key)})")
+            continue
+        if key in existing and not args.correct:
+            problems.append(
+                f"{path}: the store already holds {' '.join(key)}. Two answers "
+                f"to one question is a harness that cannot say which run it "
+                f"describes -- pass --correct to supersede it deliberately")
+            continue
+        seen_here.add(key)
+
+        digest = payload.get("payload_digest")
+        if digest is not None:
+            walk_path = getattr(args, "payload_for", {}).get(str(path))
+            if args.payloads:
+                walk_path = walk_path or _find_payload(args.payloads, digest)
+            if walk_path is not None:
+                raw = Path(walk_path).read_bytes()
+                computed = digest_bytes(raw)
+                if computed != digest:
+                    # The record refusing itself. Named, and exit 2 -- a
+                    # mismatch is not a finding about a machine, it is this
+                    # layer being unable to say what it stored.
+                    problems.append(
+                        f"{path}: declares {digest} and the payload at "
+                        f"{walk_path} digests to {computed}")
+                    continue
+                store.put_payload(raw)
+            elif args.require_payload:
+                problems.append(
+                    f"{path}: declares {digest} and no payload with that "
+                    f"digest was supplied or is already stored")
+                continue
+            elif not store.cas_path(digest).is_file():
+                problems.append(
+                    f"{path}: references {digest}, which is not in the store. "
+                    f"Supply it with --payloads, or pass --allow-dangling if "
+                    f"the payload lives somewhere this run cannot see")
+                if not args.allow_dangling:
+                    continue
+                problems.pop()
+        accepted.append(payload)
+
+    written = store.append(accepted)
+    print(f"ingest: stored {written} record(s) into {store.index_path}")
+    for problem in problems:
+        print(f"  refused {problem}")
+    if problems:
+        return INCOMPLETE
+    return CLEAN
+
+
+def _find_payload(directories: list[str], digest: str) -> str | None:
+    """Locate a walk by digest, checking the bytes rather than the filename.
+
+    Filenames are a convenience and digests are the contract. A file named after
+    a digest it does not have is exactly the case this whole check exists for.
+    """
+    _, _, hexdigest = digest.partition(":")
+    for directory in directories:
+        base = Path(directory)
+        named = base / f"{hexdigest}.json"
+        if named.is_file() and digest_bytes(named.read_bytes()) == digest:
+            return str(named)
+        for candidate in sorted(base.rglob("*.json")):
+            if digest_bytes(candidate.read_bytes()) == digest:
+                return str(candidate)
+    return None
+
+
+# -- baseline -------------------------------------------------------------
+
+def _presence(store: Store, records: list[dict]) -> tuple[
+        dict[str, set[str]], dict[str, dict[str, str]], dict[str, str]]:
+    """`(names by unit, paths by unit, unreadable by unit)`.
+
+    The union across a unit's surfaces, because a unit is the tuple: a sensor
+    that answers on the HMC is present on the machine even when the host BMC
+    does not report it.
+    """
+    present: dict[str, set[str]] = {}
+    paths: dict[str, dict[str, str]] = {}
+    unreadable: dict[str, str] = {}
+    for unit, group in latest_per_unit(records).items():
+        names: set[str] = set()
+        found: dict[str, str] = {}
+        for record in group:
+            if record.get("exit_code", CLEAN) != CLEAN:
+                unreadable[unit] = record.get(
+                    "detail", "the record reports it could not be walked")
+                break
+            try:
+                payload = json.loads(store.payload(record))
+                names |= sensor_names(payload)
+                found.update(sensor_paths(payload))
+            except (StoreError, WalkError, json.JSONDecodeError) as exc:
+                unreadable[unit] = str(exc)
+                break
+        else:
+            present[unit] = names
+            paths[unit] = found
+    return present, paths, unreadable
+
+
+def _cmd_baseline(args: argparse.Namespace) -> int:
+    store = Store(args.store)
+    try:
+        records = _in_scope(store.latest(), args.since, args.at)
+        selection = select(records, model=args.model,
+                           firmware_range=args.firmware_range,
+                           firmware=args.firmware)
+    except (StoreError, BaselineError) as exc:
+        print(f"baseline: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    for unit, reason in selection.excluded:
+        print(f"  excluded {unit}: {reason}")
+
+    present, paths, unreadable = _presence(store, selection.records)
+    for unit, reason in unreadable.items():
+        print(f"  excluded {unit}: {reason}")
+
+    scope: dict[str, Any] = {}
+    if args.model is not None:
+        scope["model"] = args.model
+    if args.firmware_range is not None:
+        scope["firmware_range"] = args.firmware_range
+    if args.firmware is not None:
+        scope["firmware"] = args.firmware
+
+    window = None
+    times = sorted(r.get("captured_at", "") for r in selection.records)
+    if times:
+        window = (times[0], times[-1])
+
+    try:
+        artifact = derive(present, paths, scope=scope,
+                          threshold=args.present_threshold, floor=args.floor,
+                          window=window)
+    except BaselineError as exc:
+        print(f"baseline: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    Path(args.out).write_text(
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"baseline: {len(artifact['sensors'])} sensor(s) over "
+          f"{artifact['derived']['units']} unit(s) -> {args.out}")
+    for line in baseline_preamble(artifact):
+        print(f"  {line}")
+    return CLEAN if not unreadable else INCOMPLETE
+
+
+# -- outliers -------------------------------------------------------------
+
+def _cmd_outliers(args: argparse.Namespace) -> int:
+    store = Store(args.store)
+    try:
+        artifact = _load(args.baseline)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"outliers: {args.baseline}: {exc}", file=sys.stderr)
+        return INCOMPLETE
+    kind, problems = validate_any(artifact)
+    if kind != BASELINE_FORMAT or problems:
+        print(f"outliers: {args.baseline} is not a usable baseline: "
+              + "; ".join(problems or [f"format is {kind!r}"]), file=sys.stderr)
+        return INCOMPLETE
+
+    try:
+        records = _in_scope(store.latest(), args.since, args.at)
+    except StoreError as exc:
+        print(f"outliers: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    present, _, unreadable = _presence(store, records)
+    rows = [row.to_dict()
+            for row in compare(expected_names(artifact), present, unreadable)]
+    payload = summary(rows, judged_against=artifact.get("provenance"))
+    return _emit(payload, "outliers", args, preamble=baseline_preamble(artifact))
+
+
+# -- drift ----------------------------------------------------------------
+
+def _cmd_drift(args: argparse.Namespace) -> int:
+    store = Store(args.store)
+    try:
+        prefix_map = parse_prefix_map(args.aggregation_prefix or [])
+        records = _in_scope(store.latest(), args.since, args.at)
+    except (StoreError, WalkError) as exc:
+        print(f"drift: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    mine = [r for r in records if r["unit_key"] == args.unit]
+    if not mine:
+        print(f"drift: no records for unit {args.unit!r} in this window. "
+              f"*Nothing to compare* is not *nothing changed*", file=sys.stderr)
+        return INCOMPLETE
+
+    by_surface: dict[tuple[str, ...], list[dict]] = {}
+    for record in mine:
+        by_surface.setdefault(surface_of(record), []).append(record)
+
+    rows: list[dict] = []
+    notes: list[str] = []
+    codes: list[int] = []
+    for surface, group in sorted(by_surface.items()):
+        group.sort(key=lambda r: r.get("captured_at", ""))
+        ordered: list[tuple[str, set[str], str | None]] = []
+        for record in group:
+            if record.get("exit_code", CLEAN) != CLEAN:
+                notes.append(
+                    f"{'/'.join(surface)} at {record.get('captured_at')}: "
+                    f"could not be walked -- "
+                    + record.get("detail", "no detail recorded"))
+                codes.append(INCOMPLETE)
+                continue
+            try:
+                payload = json.loads(store.payload(record))
+                names = sensor_names(payload)
+            except (StoreError, WalkError, json.JSONDecodeError) as exc:
+                notes.append(f"{'/'.join(surface)} at "
+                             f"{record.get('captured_at')}: {exc}")
+                codes.append(INCOMPLETE)
+                continue
+            ordered.append((record.get("captured_at", ""), names,
+                            (record.get("firmware") or {}).get("version")))
+        if len(ordered) < 2:
+            notes.append(
+                f"{'/'.join(surface)}: {len(ordered)} readable capture(s); the "
+                f"vertical axis needs two to say anything")
+            continue
+        rows.extend(step.to_dict() for step in steps(ordered, surface, prefix_map))
+
+    payload = summary(rows, notes=notes)
+    payload["exit_code"] = worst([payload["exit_code"], *codes])
+    payload["verdict"] = {CLEAN: "clean", FINDINGS: "findings",
+                          INCOMPLETE: "incomplete"}[payload["exit_code"]]
+    return _emit(payload, f"drift {args.unit}", args)
+
+
+# -- verdict --------------------------------------------------------------
+
+def _cmd_verdict(args: argparse.Namespace) -> int:
+    store = Store(args.store)
+    try:
+        expected = read_expectations(
+            Path(args.expect_units).read_text(encoding="utf-8"))
+        records = _in_scope(store.latest(), args.since, args.at)
+    except (OSError, StoreError, VerdictError) as exc:
+        print(f"verdict: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    newest: dict[str, dict] = {}
+    for record in records:
+        current = newest.get(record["unit_key"])
+        if current is None or record.get("captured_at", "") >= current.get(
+                "captured_at", ""):
+            newest[record["unit_key"]] = record
+
+    try:
+        fleet = assess(expected, newest, args.optional_unit or [])
+    except VerdictError as exc:
+        print(f"verdict: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    payload = summary([row.to_dict() for row in fleet.rows],
+                      missing=fleet.missing, skipped=fleet.skipped)
+    return _emit(payload, "fleet", args)
+
+
+# -- validate -------------------------------------------------------------
+
+def _cmd_validate(args: argparse.Namespace) -> int:
+    worst_code = CLEAN
+    for path in args.paths:
+        try:
+            payload = _load(path)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"{path}: {exc}")
+            worst_code = INCOMPLETE
+            continue
+        kind, problems = validate_any(payload)
+        if problems:
+            print(f"{path}: not a valid {kind or 'artifact'}")
+            for problem in problems:
+                print(f"  {problem}")
+            worst_code = INCOMPLETE
+        else:
+            print(f"{path}: valid {kind}")
+    return worst_code
+
+
+# -- collect --------------------------------------------------------------
+
+def _cmd_collect(args: argparse.Namespace) -> int:
+    from .collect.collector import CollectError, Collector, load_targets_file
+
+    store = Store(args.store)
+    store.initialise()
+    try:
+        targets = load_targets_file(args.targets)
+    except (OSError, CollectError) as exc:
+        print(f"collect: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    if args.backend == "mock":
+        print("collect: the mock backend walks fake machines and is for "
+              "exercising this collector, never for auditing a fleet",
+              file=sys.stderr)
+        return INCOMPLETE
+
+    from .collect.backends.subprocess_backend import subprocess_backend
+    backend = subprocess_backend(args.command.split())
+
+    collector = Collector(backend, store, collector_id=args.collector_id,
+                          attempts=args.attempts, base_delay=args.base_delay,
+                          trigger=args.trigger)
+    try:
+        records = collector.run(targets)
+    except CollectError as exc:
+        print(f"collect: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    store.append(records)
+    if args.out:
+        Path(args.out).write_text(
+            "".join(json.dumps(r, sort_keys=True) + "\n" for r in records),
+            encoding="utf-8")
+
+    rows = [{"unit_key": r["unit_key"], "exit_code": r.get("exit_code", CLEAN),
+             "detail": r.get("detail", "")} for r in records]
+    payload = summary(rows)
+    return _emit(payload, "collect", args)
+
+
+# -- parser ---------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="fleet-sensor-baseline",
+        description="Sensor presence and configuration drift across a fleet "
+                    "and across time. Exit 0 clean, 1 findings, 2 incomplete.")
+    parser.add_argument("--version", action="version",
+                        version=f"fleet-sensor-baseline {__version__}")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def store_arg(sub):
+        sub.add_argument("--store", default="fleet-store",
+                         help="the directory holding records.jsonl and cas/")
+
+    def window(sub):
+        sub.add_argument("--since", help="ignore captures before this timestamp")
+        sub.add_argument("--at", help="ignore captures after this timestamp")
+
+    def json_out(sub):
+        sub.add_argument("--json", help="also write the summary to this path")
+
+    ingest = subparsers.add_parser(
+        "ingest", help="validate and store fleet-records")
+    store_arg(ingest)
+    ingest.add_argument("records", nargs="+", help="fleet-record/1 JSON files")
+    ingest.add_argument("--payloads", action="append", default=[],
+                        help="directory holding walk payloads to store")
+    ingest.add_argument("--correct", action="store_true",
+                        help="this record deliberately supersedes one already "
+                             "stored for the same surface and time")
+    ingest.add_argument("--require-payload", action="store_true",
+                        help="refuse a record whose payload is not supplied")
+    ingest.add_argument("--allow-dangling", action="store_true",
+                        help="accept a record whose payload lives elsewhere")
+    ingest.set_defaults(func=_cmd_ingest, payload_for={})
+
+    baseline = subparsers.add_parser(
+        "baseline", help="derive a fleet-baseline/1 from stored records")
+    store_arg(baseline)
+    window(baseline)
+    baseline.add_argument("--model", help="declared model, matched exactly")
+    baseline.add_argument("--firmware-range",
+                          help="a range over firmware.release, e.g. >=1.4,<1.5")
+    baseline.add_argument("--firmware",
+                          help="a firmware.version string, matched exactly")
+    baseline.add_argument("--present-threshold", type=float,
+                          default=DEFAULT_THRESHOLD)
+    baseline.add_argument("--floor", type=int, default=DEFAULT_FLOOR,
+                          help=f"refuse a cohort smaller than this "
+                               f"(default {DEFAULT_FLOOR})")
+    baseline.add_argument("--out", required=True)
+    baseline.set_defaults(func=_cmd_baseline)
+
+    outliers = subparsers.add_parser(
+        "outliers", help="units that differ from their cohort")
+    store_arg(outliers)
+    window(outliers)
+    json_out(outliers)
+    outliers.add_argument("--baseline", required=True)
+    outliers.set_defaults(func=_cmd_outliers)
+
+    drift = subparsers.add_parser(
+        "drift", help="one unit across time and firmware")
+    store_arg(drift)
+    window(drift)
+    json_out(drift)
+    drift.add_argument("--unit", required=True)
+    drift.add_argument("--aggregation-prefix", action="append", default=[],
+                       metavar="OLD=NEW",
+                       help="declare a known prefix rename so the pair is not "
+                            "reported as a disappearance and an arrival")
+    drift.set_defaults(func=_cmd_drift)
+
+    verdict = subparsers.add_parser(
+        "verdict", help="the fleet run: every expected unit must have reported")
+    store_arg(verdict)
+    window(verdict)
+    json_out(verdict)
+    verdict.add_argument("--expect-units", required=True,
+                         help="one unit key per line")
+    verdict.add_argument("--optional-unit", action="append", default=[],
+                         help="this unit is allowed not to report; a decision "
+                              "on the record")
+    verdict.set_defaults(func=_cmd_verdict)
+
+    validate = subparsers.add_parser(
+        "validate", help="check an artifact against the format it declares")
+    validate.add_argument("paths", nargs="+")
+    validate.set_defaults(func=_cmd_validate)
+
+    collect = subparsers.add_parser(
+        "collect", help="walk a rack of BMCs and file the records")
+    store_arg(collect)
+    json_out(collect)
+    collect.add_argument("--targets", required=True)
+    collect.add_argument("--out", help="also write the records as JSONL here")
+    collect.add_argument("--collector-id", default="unnamed")
+    collect.add_argument("--command", default="bmc-sensor-audit",
+                         help="how to invoke the referee")
+    collect.add_argument("--backend", default="subprocess",
+                         choices=("subprocess", "mock"))
+    collect.add_argument("--attempts", type=int, default=3)
+    collect.add_argument("--base-delay", type=float, default=1.0)
+    collect.add_argument("--trigger", default="scheduled")
+    collect.set_defaults(func=_cmd_collect)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except StoreError as exc:
+        print(f"{args.command}: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

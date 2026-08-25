@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Walks recorded from a real machine. A Redfish walk carries serial numbers, asset
+# tags and MAC addresses, so a capture is a fleet inventory disclosure. Scenario
+# runs write walks to a temporary directory for exactly this reason; anything
+# landing here was put here deliberately and should be looked at before committing.
+walks/
+*.capture.json

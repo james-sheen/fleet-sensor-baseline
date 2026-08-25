@@ -1,0 +1,101 @@
+# The suite twice, because the two lanes answer different questions.
+#
+# The dependency-free lane is what a jump host gets: ingest, baseline, outliers,
+# drift, verdict and validate, on the standard library alone. If that lane needs
+# something installed, the claim in the README stopped being true.
+#
+# The referee lane unskips the seam. Those 14 are the only tests that can notice
+# the upstream format string changing, `validate-walk` refusing what `capture`
+# wrote, or the printed digest ceasing to describe the file -- and none of them
+# can run without the tool. **A suite that only ever ran the first lane would be
+# green on a broken seam**, which is exactly what the skips say in prose.
+#
+# The referee is pinned as a range. Any 0.1.x release lands here without this
+# repository changing, which is precisely the seam the second lane can notice.
+
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are what `test_a_tag_and_the_tree_do_not_disagree` reads, and
+          # `fetch-depth: 1` fetches none of them. The check answers *cannot
+          # tell* in that case rather than *no tags*, which is honest and is
+          # also not the answer we came for.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install, dependency-free
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet -e ".[dev]"
+
+      - name: The dependency-free lane
+        # Expected: some tests skip, and every one of them says why. A skip here
+        # is the seam being unchecked, not the seam being fine.
+        run: python3 -m pytest tests/ -q -rs
+
+      - name: Nothing was installed behind our back
+        # The claim in the README and in NOTICE is that the core imports no
+        # third-party package. This is the check for it -- an import that crept
+        # into `store.py` would still pass the lane above on a runner where the
+        # referee happened to be present.
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import importlib, sys
+          sys.path.insert(0, 'src')
+          assert 'bmc_sensor_audit' not in sys.modules
+          for name in ('store', 'formats', 'baseline', 'outliers', 'drift',
+                       'verdict', 'walk', 'report', 'exits', 'cli'):
+              importlib.import_module('fleet_sensor_baseline.' + name)
+          leaked = sorted(m for m in sys.modules if m.startswith('bmc_sensor_audit'))
+          assert not leaked, f'the core pulled in {leaked}'
+          print('  core imports nothing from the referee')
+          "
+
+      - name: Install the referee
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet -e ".[collect,dev]"
+          python3 -m pip show bmc-sensor-audit | sed -n 's/^Version: /  referee /p'
+
+      - name: The referee lane -- the seam, unskipped
+        run: python3 -m pytest tests/ -q
+
+      - name: The seam lane is not empty
+        # Non-vacuity. If the marker were dropped from every test, the step
+        # above would still be green and would be testing nothing upstream.
+        run: |
+          set -euo pipefail
+          collected=$(python3 -m pytest tests/ -m seam --collect-only -q \
+            | sed -n 's#^\([0-9]\+\)/[0-9]\+ tests collected.*#\1#p')
+          echo "  seam tests: ${collected:-0}"
+          test "${collected:-0}" -gt 0
+
+      - name: The publication vocabulary, over the tree
+        run: python3 tools/hygiene_check.py --all
+
+      - name: A mock rack, end to end
+        # 0.3's exit criterion, stated as a command: a verdict produced from
+        # nothing but BMC endpoints. It runs against fake machines, which is the
+        # only tier available without hardware -- and it is the tier the exit
+        # criterion names.
+        run: |
+          set -euo pipefail
+          python3 -m pytest tests/test_seam.py::TestTheCollectorAgainstAMockRack -q

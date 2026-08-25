@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fleet-sensor-baseline"
+# Read from `src/fleet_sensor_baseline/__init__.py` rather than written here.
+# Two literals that happen to agree is the arrangement that drifts: nothing
+# reads the packaging one, so a bump in the wrong place ships a wheel whose
+# `__version__` disagrees with its own metadata and no check notices.
+dynamic = ["version"]
+description = "Which units differ from their cohort, and what changed across time."
+readme = "README.md"
+requires-python = ">=3.10"
+
+# PEP 639 SPDX expression. Deliberately NO `License :: OSI Approved ::`
+# classifier: the index rejects the two together, and a clean local build is not
+# the check for that.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "James Sheen" }]
+keywords = ["openbmc", "redfish", "bmc", "fleet", "sensors", "drift",
+            "baseline", "hardware"]
+
+# **No dependencies, on purpose.** Ingest, baseline, outliers, drift, verdict
+# and validate are JSON and arithmetic, so the vertical and horizontal axes run
+# on a jump host with nothing provisioned. The referee arrives only with the
+# collector, and only because `collect` needs the COMMAND on PATH.
+dependencies = []
+
+[project.optional-dependencies]
+# **The floor is DERIVED, not chosen, and the derivation is the point.** This
+# collector calls `bmc-sensor-audit validate-walk` and reads the handle printed
+# by `capture --print-digest`. Both were measured against every published
+# release inside the range before this line was written:
+#
+#     0.1.0   validate-walk ABSENT, capture --print-digest ABSENT
+#     0.1.1   both present
+#
+# The specification this repository was built from pinned `>=0.1.0,<0.2` while
+# describing an implementation that calls both -- a pin is a claim about every
+# release in its range, and that one was false at its own floor.
+collect = ["bmc-sensor-audit>=0.1.1,<0.2"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+fleet-sensor-baseline = "fleet_sensor_baseline.cli:main"
+
+# An index page with no way back to the source is a dead end for the one reader
+# who wants to check a claim.
+[project.urls]
+Homepage = "https://github.com/james-sheen/fleet-sensor-baseline"
+Source = "https://github.com/james-sheen/fleet-sensor-baseline"
+Issues = "https://github.com/james-sheen/fleet-sensor-baseline/issues"
+
+[tool.hatch.version]
+path = "src/fleet_sensor_baseline/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fleet_sensor_baseline"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# Registered rather than left implicit, so an unknown-marker typo is an error
+# instead of a test that silently belongs to no lane.
+markers = [
+  "seam: needs bmc-sensor-audit installed; exercises the upstream seam",
+]
