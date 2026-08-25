@@ -24,7 +24,20 @@ import re
 from typing import Any
 
 RECORD_FORMAT = "fleet-sensor-baseline/fleet-record/1"
-BASELINE_FORMAT = "fleet-sensor-baseline/fleet-baseline/1"
+#: Superseded. A `/1` records only the sensors that cleared the presence
+#: threshold, and silently forgets every sensor that most of the cohort had and
+#: some did not. Judged against, that omission INVERTS the report: with 22 of 24
+#: units carrying a sensor, the 22 were named as the outliers and the 2 that had
+#: lost it came back clean. A `/1` cannot be judged safely because the
+#: information needed to judge it was dropped when it was derived.
+BASELINE_V1_FORMAT = "fleet-sensor-baseline/fleet-baseline/1"
+
+#: Carries `divergent` as well as `sensors`. The bump is not cosmetic: a reader
+#: that predates the key would ignore it and charge every divergent sensor to
+#: the units that HAVE it, which is the inversion above, arrived at silently. An
+#: unknown format is refused; an unknown key is dropped -- so this had to be a
+#: new format rather than a new field.
+BASELINE_FORMAT = "fleet-sensor-baseline/fleet-baseline/2"
 SUMMARY_FORMAT = "fleet-sensor-baseline/summary/1"
 #: The collector's input. Not one of the three formats the specification
 #: enumerates -- it is an implementation necessity of `collect --targets FILE`,
@@ -50,7 +63,8 @@ TARGETS_FORMATS = (TARGETS_FORMAT, TARGETS_V2_FORMAT)
 PIN_SHA256 = re.compile(r"^(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$|^[0-9A-Fa-f]{64}$")
 
 #: Every format key this build writes and reads, for `validate` to dispatch on.
-FORMATS = (RECORD_FORMAT, BASELINE_FORMAT, SUMMARY_FORMAT, TARGETS_FORMAT,
+FORMATS = (RECORD_FORMAT, BASELINE_V1_FORMAT, BASELINE_FORMAT,
+           SUMMARY_FORMAT, TARGETS_FORMAT,
            TARGETS_V2_FORMAT)
 
 #: **Part of the format, not of the renderer.** Every consumer that judges
@@ -159,6 +173,29 @@ def validate_record(payload: Any) -> list[str]:
     if "trigger" in payload and not isinstance(payload["trigger"], str):
         problems.append("'trigger' is present and is not a string")
     return problems
+
+
+def validate_baseline_v1(payload: Any) -> list[str]:
+    """A `/1` parses and is still refused, in prose, for what it does not carry.
+
+    It records only the sensors that cleared the presence threshold. Every
+    sensor most of the cohort had and some did not was dropped at derivation,
+    and nothing downstream can recover it -- so a judgment made against a `/1`
+    charges those sensors to the units that HAVE them. With 22 of 24 units
+    carrying a sensor, that named the 22 and cleared the 2 that had lost it.
+
+    Refused rather than upgraded, because the missing information is not in the
+    file: it has to be derived again from the store.
+    """
+    problems = _base_problems(payload, BASELINE_V1_FORMAT)
+    if problems is not None:
+        return problems
+    return [
+        f"{BASELINE_V1_FORMAT} is superseded and cannot be judged against. It "
+        f"records no divergent sensors, so a sensor present on most of the "
+        f"cohort but not all of it was dropped when this file was derived, and "
+        f"judging against it reports the units that HAVE such a sensor as the "
+        f"outliers. Derive again to get a {BASELINE_FORMAT}"]
 
 
 def validate_baseline(payload: Any) -> list[str]:
@@ -343,6 +380,7 @@ def validate_targets(payload: Any) -> list[str]:
 #: it is rather than on what the caller guessed from the filename.
 VALIDATORS = {
     RECORD_FORMAT: validate_record,
+    BASELINE_V1_FORMAT: validate_baseline_v1,
     BASELINE_FORMAT: validate_baseline,
     SUMMARY_FORMAT: validate_summary,
     TARGETS_FORMAT: validate_targets,

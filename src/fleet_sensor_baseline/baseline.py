@@ -34,6 +34,18 @@ DEFAULT_FLOOR = 20
 
 DEFAULT_THRESHOLD = 0.99
 
+#: At or below this ratio a sensor is FOREIGN to the cohort, and a unit that has
+#: one is genuinely unusual. Between the two thresholds the cohort disagrees with
+#: itself, and that is a fact about the COHORT rather than about any unit in it.
+#:
+#: The band has to exist. Without it every sensor was either expected or foreign,
+#: so a sensor present on 22 of 24 units -- below 0.99, far above nothing -- was
+#: classed foreign, and the 22 units that HAD it were reported as the outliers
+#: while the 2 that had lost it came back clean. A proportion is a coarse
+#: instrument at rack scale: 0.99 of 24 is 23.76, so ONE deviant unit crossed it,
+#: and `--floor` admits cohorts from 20.
+DEFAULT_ABSENT_THRESHOLD = 0.01
+
 
 class BaselineError(Exception):
     """A derivation this module refuses, with the reason in the message."""
@@ -166,6 +178,7 @@ def latest_per_unit(records: Iterable[dict]) -> dict[str, list[dict]]:
 def derive(present_by_unit: dict[str, set[str]],
            paths_by_unit: dict[str, dict[str, str]],
            *, scope: dict, threshold: float = DEFAULT_THRESHOLD,
+           absent_threshold: float = DEFAULT_ABSENT_THRESHOLD,
            floor: int = DEFAULT_FLOOR,
            window: tuple[str, str] | None = None) -> dict:
     """Build the `fleet-baseline/1`. Raises `BaselineError` below the floor."""
@@ -183,6 +196,12 @@ def derive(present_by_unit: dict[str, set[str]],
     if not 0.0 < threshold <= 1.0:
         raise BaselineError(
             f"--present-threshold is {threshold}, outside (0, 1]")
+    if not 0.0 <= absent_threshold < threshold:
+        raise BaselineError(
+            f"--absent-threshold is {absent_threshold}, which must be at least "
+            f"0 and below --present-threshold ({threshold}). With the two "
+            f"equal there is no band for a cohort that disagrees with itself, "
+            f"and the disagreement is charged to individual units instead")
 
     counts: dict[str, int] = {}
     for names in present_by_unit.values():
@@ -190,9 +209,21 @@ def derive(present_by_unit: dict[str, set[str]],
             counts[name] = counts.get(name, 0) + 1
 
     sensors = []
+    divergent = []
     for name in sorted(counts):
         ratio = counts[name] / total
         if ratio < threshold:
+            if ratio > absent_threshold:
+                # Recorded, not dropped. `/1` dropped it, and a consumer then
+                # had no way to tell "the cohort disagrees about this" from
+                # "nobody has this" -- so it charged the difference to whichever
+                # group was larger, which is the wrong one.
+                divergent.append({
+                    "name": name,
+                    "present_ratio": round(ratio, 6),
+                    "present_on": counts[name],
+                    "of": total,
+                })
             continue
         entry: dict = {"name": name, "present_ratio": round(ratio, 6)}
         # **Only when the contributing units agree.** A baseline that asserts
@@ -204,7 +235,8 @@ def derive(present_by_unit: dict[str, set[str]],
             entry["uri_suffix"] = seen.pop()
         sensors.append(entry)
 
-    derived: dict = {"units": total, "present_threshold": threshold}
+    derived: dict = {"units": total, "present_threshold": threshold,
+                     "absent_threshold": absent_threshold}
     if window is not None:
         derived["captured_between"] = list(window)
     return {
@@ -212,6 +244,7 @@ def derive(present_by_unit: dict[str, set[str]],
         "scope": scope,
         "derived": derived,
         "sensors": sensors,
+        "divergent": divergent,
         "provenance": PROVENANCE_DERIVED,
         "notice": DOWNGRADE_NOTICE,
     }
@@ -219,6 +252,16 @@ def derive(present_by_unit: dict[str, set[str]],
 
 def expected_names(baseline: dict) -> set[str]:
     return {sensor["name"] for sensor in baseline.get("sensors", [])}
+
+
+def divergent_names(baseline: dict) -> set[str]:
+    """Sensors the cohort disagrees about.
+
+    A judgment must not charge these to a unit in either direction: having one
+    is not an anomaly and lacking one is not an absence. The disagreement is
+    the finding, and it belongs to the cohort.
+    """
+    return {entry["name"] for entry in baseline.get("divergent", [])}
 
 
 def derivation_line(baseline: dict) -> str:

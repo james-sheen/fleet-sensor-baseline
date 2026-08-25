@@ -17,13 +17,15 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import __version__
-from .baseline import (BaselineError, DEFAULT_FLOOR, DEFAULT_THRESHOLD, derive,
-                       expected_names, latest_per_unit, select)
+from .baseline import (BaselineError, DEFAULT_ABSENT_THRESHOLD,
+                       DEFAULT_FLOOR, DEFAULT_THRESHOLD, derive,
+                       divergent_names, expected_names,
+                       latest_per_unit, select)
 from .drift import steps
 from .exits import CLEAN, FINDINGS, INCOMPLETE, worst
 from .formats import (BASELINE_FORMAT, RECORD_FORMAT, validate_any,
                       validate_record)
-from .outliers import compare
+from .outliers import compare, divergences
 from .report import baseline_preamble, render, summary
 from .store import (Store, StoreError, digest_bytes, iter_json, key_of,
                     ref_for, surface_of)
@@ -239,6 +241,7 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
 
     try:
         artifact = derive(present, paths, scope=scope,
+                          absent_threshold=args.absent_threshold,
                           threshold=args.present_threshold, floor=args.floor,
                           window=window)
     except BaselineError as exc:
@@ -247,8 +250,10 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
 
     Path(args.out).write_text(
         json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    divergent = len(artifact.get("divergent", []))
+    tail = (f", and {divergent} the cohort disagrees about" if divergent else "")
     print(f"baseline: {len(artifact['sensors'])} sensor(s) over "
-          f"{artifact['derived']['units']} unit(s) -> {args.out}")
+          f"{artifact['derived']['units']} unit(s){tail} -> {args.out}")
     for line in baseline_preamble(artifact):
         print(f"  {line}")
     return CLEAN if not unreadable else INCOMPLETE
@@ -276,10 +281,25 @@ def _cmd_outliers(args: argparse.Namespace) -> int:
         return INCOMPLETE
 
     present, _, unreadable = _presence(store, records)
+    diverged = divergences(artifact, present)
     rows = [row.to_dict()
-            for row in compare(expected_names(artifact), present, unreadable)]
-    payload = summary(rows, judged_against=artifact.get("provenance"))
-    return _emit(payload, "outliers", args, preamble=baseline_preamble(artifact))
+            for row in compare(expected_names(artifact), present, unreadable,
+                               divergent=divergent_names(artifact))]
+    payload = summary(
+        rows, judged_against=artifact.get("provenance"),
+        cohort_code=FINDINGS if diverged else CLEAN,
+        cohort_decided_by=[f"cohort:{d.name}" for d in diverged])
+    if diverged:
+        payload["divergent"] = [d.to_dict() for d in diverged]
+    preamble = baseline_preamble(artifact)
+    for d in diverged:
+        label, units = d.minority
+        preamble.append(
+            f"divergent: {d.name} present on {d.present_on} of {d.of} unit(s). "
+            f"The cohort disagrees with itself, so this is reported here and "
+            f"charged to no unit; the {len(units)} that {label}: "
+            f"{', '.join(units)}")
+    return _emit(payload, "outliers", args, preamble=preamble)
 
 
 # -- drift ----------------------------------------------------------------
@@ -518,7 +538,15 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--firmware",
                           help="a firmware.version string, matched exactly")
     baseline.add_argument("--present-threshold", type=float,
-                          default=DEFAULT_THRESHOLD)
+                          default=DEFAULT_THRESHOLD,
+                          help=f"at or above this ratio a sensor is expected of "
+                               f"every unit (default {DEFAULT_THRESHOLD})")
+    baseline.add_argument("--absent-threshold", type=float,
+                          default=DEFAULT_ABSENT_THRESHOLD,
+                          help=f"at or below this ratio a sensor is foreign to "
+                               f"the cohort (default {DEFAULT_ABSENT_THRESHOLD}). "
+                               f"Between the two the cohort disagrees with "
+                               f"itself and the sensor is charged to no unit")
     baseline.add_argument("--floor", type=int, default=DEFAULT_FLOOR,
                           help=f"refuse a cohort smaller than this "
                                f"(default {DEFAULT_FLOOR})")

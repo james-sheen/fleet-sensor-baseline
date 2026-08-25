@@ -353,3 +353,87 @@ class TestS5ThePrefixChange:
                               "--unit", "h-0042", *self.DECLARED], capsys)
         assert code == FINDINGS
         assert "HMC0_Inlet_Temp" in captured.out
+
+
+class TestS6TheCohortThatDisagreesWithItself:
+    """A rack, default thresholds, two units that lost a sensor.
+
+    **This is the scenario the tool is named for, and it used to report the
+    exact opposite of the truth.** With 22 of 24 units carrying `Fan_CPU_2`,
+    the sensor fell below the 0.99 presence threshold, so it was dropped from
+    the baseline entirely -- and `outliers` then charged it as `extra` to every
+    unit that HAD it. The 22 healthy trays were named as the outliers and the 2
+    that had lost it came back `clean`.
+
+    The arithmetic is why it bites at exactly this size. A proportion is a
+    coarse instrument on a small cohort: 0.99 of 24 is 23.76, so ONE deviant
+    unit crosses it, and `--floor` admits cohorts from 20. Between 20 and about
+    100 units -- a rack -- the default inverted the report.
+
+    **S1 above already knew.** It passes `present_threshold=0.8` with a comment
+    saying the sensor "would never enter a baseline derived from THIS cohort".
+    The workaround made the test green, so nothing ever asked why the default
+    could not express the case the README opens with.
+    """
+
+    def _rack(self, fleet):
+        for index in range(1, 25):
+            names = list(COHORT)
+            if index in (6, 7):
+                names.remove("Fan_CPU_2")
+            fleet.add(f"tray-{index:02d}", names, model="tray")
+
+    def test_the_two_that_lost_it_are_named_and_the_healthy_are_not(
+            self, fleet, tmp_path, capsys):
+        self._rack(fleet)
+        baseline = build_baseline(fleet, tmp_path, capsys)   # DEFAULT thresholds
+
+        code, captured = run(["outliers", "--store", str(fleet.store.root),
+                              "--baseline", str(baseline)], capsys)
+
+        assert "tray-06" in captured.out and "tray-07" in captured.out
+        assert "22 of 24" in captured.out
+        assert code == FINDINGS
+
+    def test_no_healthy_unit_is_charged_with_the_sensor_it_has(
+            self, fleet, tmp_path, capsys):
+        """The inversion itself, pinned. Every unit that HAS `Fan_CPU_2` must be
+        clean: having what your cohort has is not a finding."""
+        self._rack(fleet)
+        baseline = build_baseline(fleet, tmp_path, capsys)
+        _, captured = run(["outliers", "--store", str(fleet.store.root),
+                           "--baseline", str(baseline), "--json",
+                           str(tmp_path / "out.json")], capsys)
+        payload = json.loads((tmp_path / "out.json").read_text())
+
+        charged = [row["unit_key"] for row in payload["rows"]
+                   if "Fan_CPU_2" in row.get("extra", [])]
+        assert charged == [], (
+            f"these units were charged with a sensor their cohort also has: "
+            f"{charged}")
+
+    def test_the_divergence_is_reported_once_at_cohort_level(
+            self, fleet, tmp_path, capsys):
+        self._rack(fleet)
+        baseline = build_baseline(fleet, tmp_path, capsys)
+        _, captured = run(["outliers", "--store", str(fleet.store.root),
+                           "--baseline", str(baseline), "--json",
+                           str(tmp_path / "out.json")], capsys)
+        payload = json.loads((tmp_path / "out.json").read_text())
+
+        assert len(payload.get("divergent", [])) == 1
+        entry = payload["divergent"][0]
+        assert entry["name"] == "Fan_CPU_2"
+        assert entry["present_on"] == 22 and entry["of"] == 24
+        assert sorted(entry["units"]) == ["tray-06", "tray-07"]
+
+    def test_the_baseline_records_it_rather_than_dropping_it(
+            self, fleet, tmp_path, capsys):
+        """`/1` dropped it, which is why `/1` cannot be judged against: the
+        information needed to judge is not in the file."""
+        self._rack(fleet)
+        baseline = json.loads(
+            build_baseline(fleet, tmp_path, capsys).read_text())
+        assert baseline["format"].endswith("/fleet-baseline/2")
+        assert [d["name"] for d in baseline["divergent"]] == ["Fan_CPU_2"]
+        assert "Fan_CPU_2" not in [s["name"] for s in baseline["sensors"]]

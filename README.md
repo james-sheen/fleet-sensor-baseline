@@ -148,7 +148,7 @@ A baseline derived from a fleet **cannot see an absence the whole cohort shares.
 Two thousand trays that all lost the same sensor in the same firmware agree with
 each other perfectly, and consensus reports them clean.
 
-So every `fleet-baseline/1` carries this sentence as **part of the format**, and
+So every `fleet-baseline/2` carries this sentence as **part of the format**, and
 every consumer prints it verbatim:
 
 > This baseline was derived from the fleet, not declared by a manufacturer. It
@@ -161,13 +161,14 @@ rule, made executable.
 
 ## Formats
 
-Five, each versioned and each with a shipped validator, because **the person who
+Six, each versioned and each with a shipped validator, because **the person who
 receives the file is the one who needs to check it**:
 
 | format | is |
 |---|---|
 | `fleet-sensor-baseline/fleet-record/1` | one capture of one unit |
-| `fleet-sensor-baseline/fleet-baseline/1` | a derived declaration, labeled as such |
+| `fleet-sensor-baseline/fleet-baseline/1` | superseded; refused, because it dropped the sensors the cohort disagreed about |
+| `fleet-sensor-baseline/fleet-baseline/2` | a derived declaration, labeled as such, carrying `divergent` |
 | `fleet-sensor-baseline/summary/1` | a verdict, in the family's one vocabulary |
 | `fleet-sensor-baseline/targets/1` | the collector's rack list |
 | `fleet-sensor-baseline/targets/2` | the same, and may declare `pin_sha256` |
@@ -176,6 +177,35 @@ receives the file is the one who needs to check it**:
 key the file declares rather than on a shape guessed from the fields present.
 
 See [docs/formats.md](docs/formats.md).
+
+## Storage
+
+### When the cohort disagrees with itself
+
+A sensor is **expected** at or above `--present-threshold` (0.99), **foreign** at
+or below `--absent-threshold` (0.01), and between the two the cohort simply
+disagrees. That middle band is reported once, against the cohort, naming the
+minority -- and charged to no unit.
+
+The band is not a refinement, it is a correction. Without it a sensor on 22 of 24
+trays was below 0.99, so it left the baseline entirely, and every unit that
+**had** it was reported as carrying something unexpected:
+
+    tray-01 .. tray-24 (22 of them)   findings -- unexpected: Fan_CPU_2
+    tray-06, tray-07                  clean
+
+The 22 healthy trays were the outliers and the two that had lost the sensor
+passed. A proportion is a coarse instrument at rack scale -- 0.99 of 24 is
+23.76, so one deviant unit crosses it, and `--floor` admits cohorts from 20. The
+README's own opening case inverted between 20 and about 100 units.
+
+It now reads:
+
+    divergent: Fan_CPU_2 present on 22 of 24 unit(s). The cohort disagrees with
+    itself, so this is reported here and charged to no unit; the 2 that do not
+    report it: tray-06, tray-07
+
+`tests/test_scenarios.py::TestS6TheCohortThatDisagreesWithItself` pins it.
 
 ## Storage
 
@@ -212,7 +242,7 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 271 |
+| tests collected | 275 |
 | of those, requiring `bmc-sensor-audit` | 34 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and

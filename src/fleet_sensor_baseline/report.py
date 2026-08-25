@@ -20,7 +20,9 @@ from .formats import DOWNGRADE_NOTICE, SUMMARY_FORMAT, PROVENANCE_DERIVED
 
 def summary(rows: Iterable[dict], *, missing: Iterable[str] = (),
             skipped: Iterable[str] = (), judged_against: str | None = None,
-            notes: Iterable[str] = ()) -> dict:
+            notes: Iterable[str] = (),
+            cohort_code: int = CLEAN,
+            cohort_decided_by: Iterable[str] = ()) -> dict:
     """Assemble a `summary/1`.
 
     `judged_against` names WHICH KIND OF TRUTH decided this, and it is not
@@ -29,9 +31,16 @@ def summary(rows: Iterable[dict], *, missing: Iterable[str] = (),
     entirely different things. Every artifact this layer emits says which it was.
     """
     rows = [dict(row) for row in rows]
-    code = worst(row.get("exit_code", CLEAN) for row in rows)
+    # `cohort_code` folds in a finding that belongs to the COHORT rather than to
+    # any unit -- a sensor the cohort disagrees about. Folded in here rather
+    # than patched onto the result afterwards, because `verdict` is derived from
+    # the code and setting one without the other printed `clean (exit 1)`.
+    cohort_decided_by = list(cohort_decided_by)
+    code = worst([*(row.get("exit_code", CLEAN) for row in rows), cohort_code])
     decided_by = [_name(row) for row in rows
                   if row.get("exit_code") == code and code != CLEAN]
+    if cohort_code == code and code != CLEAN:
+        decided_by.extend(cohort_decided_by)
     out: dict[str, Any] = {
         "format": SUMMARY_FORMAT,
         "exit_code": code,

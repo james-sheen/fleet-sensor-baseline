@@ -83,7 +83,12 @@ class TestTheDenominator:
         present = _presence(100, ["Everywhere"])
         for index in range(4):
             present[f"h-{index:04d}"] = {"Everywhere", "Rare"}
-        artifact = derive(present, {}, scope={}, threshold=0.01)
+        # `absent_threshold=0` because a present-threshold of 0.01 leaves no
+        # room beneath the default one, and `derive` refuses that rather than
+        # quietly producing a baseline with no divergent band. This test is
+        # about ratio arithmetic, so it says so explicitly.
+        artifact = derive(present, {}, scope={}, threshold=0.01,
+                          absent_threshold=0.0)
         ratios = {s["name"]: s["present_ratio"] for s in artifact["sensors"]}
         assert ratios == {"Everywhere": 1.0, "Rare": 0.04}
 

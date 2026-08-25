@@ -49,7 +49,8 @@ class UnitOutlier:
 
 
 def compare(expected: set[str], present_by_unit: dict[str, set[str]],
-            unreadable: dict[str, str] | None = None) -> list[UnitOutlier]:
+            unreadable: dict[str, str] | None = None,
+            divergent: set[str] | None = None) -> list[UnitOutlier]:
     """Every unit against the baseline, in a stable order.
 
     Every unit appears, including the clean ones. A report that listed only the
@@ -58,13 +59,58 @@ def compare(expected: set[str], present_by_unit: dict[str, set[str]],
     this repository.
     """
     unreadable = unreadable or {}
+    divergent = divergent or set()
     rows: list[UnitOutlier] = []
     for unit in sorted(set(present_by_unit) | set(unreadable)):
         if unit in unreadable:
             rows.append(UnitOutlier(unit, unreadable=unreadable[unit]))
             continue
         present = present_by_unit[unit]
-        rows.append(UnitOutlier(unit,
-                                absent=sorted(expected - present),
-                                extra=sorted(present - expected)))
+        rows.append(UnitOutlier(
+            unit,
+            absent=sorted(expected - present),
+            # `- divergent` is the whole fix. Without it, a sensor the cohort
+            # disagrees about is not in `expected`, so every unit that HAS one
+            # was charged with an `extra` -- and with 22 of 24 units carrying it
+            # the report named those 22 and called the 2 that had lost it clean.
+            extra=sorted(present - expected - divergent)))
     return rows
+
+
+@dataclass
+class Divergence:
+    """One sensor the cohort disagrees about, reported once.
+
+    Charged to the cohort and to no unit, because neither group is wrong: the
+    disagreement itself is the finding. The minority is named because it is the
+    actionable half -- these are the machines that differ from their peers.
+    """
+    name: str
+    present_on: int
+    of: int
+    with_it: list[str]
+    without_it: list[str]
+
+    @property
+    def minority(self) -> tuple[str, list[str]]:
+        if len(self.without_it) <= len(self.with_it):
+            return "do not report it", self.without_it
+        return "report it", self.with_it
+
+    def to_dict(self) -> dict:
+        label, units = self.minority
+        return {"name": self.name, "present_on": self.present_on,
+                "of": self.of, "minority": label, "units": units}
+
+
+def divergences(baseline: dict,
+                present_by_unit: dict[str, set[str]]) -> list[Divergence]:
+    """The cohort-level half of the judgment."""
+    out = []
+    for entry in baseline.get("divergent", []):
+        name = entry["name"]
+        with_it = sorted(u for u, s in present_by_unit.items() if name in s)
+        without = sorted(u for u, s in present_by_unit.items() if name not in s)
+        out.append(Divergence(name, len(with_it), len(present_by_unit),
+                              with_it, without))
+    return out
