@@ -409,3 +409,64 @@ class TestTheEtagSkipIsDetectedAgainstTheRealTool:
         # repository made in three places until it was measured.
         assert second["payload_digest"] != first["payload_digest"]
 
+@NEEDS_TOOL
+class TestTheOutcomeVocabularyAgrees:
+    """The values this layer acts on, against the values the referee declares.
+
+    **Written this way because of what happened with the prefix dialect.** That
+    one was asserted from this side only -- a mirror of the referee's rule that
+    could not notice the referee changing -- and when upstream lifted a refusal
+    the two parted silently under a green suite. A claim about another program
+    has to be measured against that program.
+
+    So this reads `bmc_sensor_audit.cli.OUTCOMES` rather than restating it.
+    """
+
+    @staticmethod
+    def _theirs():
+        _import_referee()
+        from bmc_sensor_audit import cli
+        return cli
+
+    def test_this_layer_knows_every_value_the_referee_declares(self):
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            OUTCOMES
+        theirs = set(self._theirs().OUTCOMES)
+        assert theirs <= OUTCOMES, (
+            f"the referee declares {sorted(theirs - OUTCOMES)} and this layer "
+            f"does not act on it. An unknown outcome becomes exit 2 rather than "
+            f"a guess, so nothing is silently wrong -- but a whole fleet stops "
+            f"being collectable until this set is updated")
+
+    def test_it_claims_no_value_the_referee_does_not(self):
+        """The other direction. A value we act on and they never emit is dead
+        code that reads as coverage."""
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            OUTCOMES
+        assert OUTCOMES <= set(self._theirs().OUTCOMES)
+
+    def test_the_prefix_this_layer_matches_is_the_one_they_print(self):
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            OUTCOME_LINE
+        prefix = self._theirs().OUTCOME
+        assert OUTCOME_LINE.match(f"{prefix}walked"), (
+            f"the referee prints {prefix!r} and this layer's pattern does not "
+            f"match it")
+
+    def test_an_unknown_outcome_is_refused_rather_than_guessed(self, tmp_path):
+        """Non-vacuity, and the branch that matters: a vocabulary that grows a
+        member must not silently take the walked path."""
+        from fleet_sensor_baseline.collect.backends.subprocess_backend import \
+            subprocess_backend
+        from fleet_sensor_baseline.collect.collector import Target
+
+        class Completed:
+            returncode = 0
+            stdout = "OUTCOME reconsidered\n"
+            stderr = ""
+
+        backend = subprocess_backend(runner=lambda argv: Completed())
+        capture = backend.capture(Target(unit_key="h", base_url="https://h"))
+        assert capture.exit_code == 2
+        assert "does not know how to act on" in capture.detail
+

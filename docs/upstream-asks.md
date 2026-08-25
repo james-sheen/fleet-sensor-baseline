@@ -1,7 +1,8 @@
 # What this layer could not do, and what closed it
 
-**Four found, fixed, released; three consumed. A fifth is open, and it was
-created by the fix for the first.**
+**Five found, five fixed, five released. Four consumed here; one
+(`--cafile`/`--pin-sha256`) is available and not taken. The fifth was created
+by the fix for the first.**
 
 **The original four are FIXED, RELEASED and CONSUMED as of 2026-08-25.** They shipped in
 `bmc-sensor-audit 0.1.2`; this repository's floor moved to `>=0.1.2` and the
@@ -157,6 +158,7 @@ Fix summary, as landed rather than as asked:
 | # | landed as | used here |
 |---|---|---|
 | 2 | `capture --etag-cache PATH`, probing COLLECTIONS only — narrower than asked; see below | **yes** — `collect --etag-cache`, one cache per surface |
+| 6 | `capture` prints one declared `OUTCOME` line | **yes** — read as contract, unknown values are exit 2 |
 | 3 | `--cafile PATH` and `--pin-sha256 FINGERPRINT` | not yet — `targets/1` has no field for either |
 | 4 | `--password-env NAME` and `--password-file PATH` | **yes** — no credential crosses argv |
 | 5 | an empty `OLD` declares a prefix that was added | **yes** — one entry, not one per stem |
@@ -180,15 +182,17 @@ than absorbed:
   which is how the *store collapses a homogeneous fleet* claim was finally
   measured and found false. See `store.py`.
 
-## 5. Telling a skip apart from a walk (still open)
+## 5. Telling a skip apart from a walk (closed)
 
 **Measured on 0.1.2.** With a populated cache and an unchanged BMC, `capture
 --etag-cache` exits `0` and writes nothing; a normal walk also exits `0`. The
 only affirmative signal is a printed sentence.
 
-**What this repository does.** Matches the sentence, in
-`collect/backends/subprocess_backend.py`, and says so in a comment rather than
-letting it look structural.
+**Closed in `bmc-sensor-audit` 0.1.3 and consumed here.** `capture` prints one
+declared `OUTCOME ` line — `walked` or `unchanged` — published as contract while
+the rest of its output stays prose. This repository's floor moved to `>=0.1.3`,
+the backend reads the line, and an outcome it does not recognise is exit `2`
+rather than a guess about which branch was meant.
 
 **What would close it.** A distinct exit code for the skip, or one
 machine-readable line beside the prose.

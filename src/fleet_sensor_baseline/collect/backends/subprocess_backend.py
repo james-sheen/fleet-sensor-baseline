@@ -14,6 +14,11 @@ this backend passes the NAME through `--password-env`; the referee reads the
 value in its own process. It still checks the variable is set before spawning,
 so a missing credential is a refusal here rather than a misleading 401 from the
 BMC.
+
+**A skipped walk is read from a declared line, not from prose.** `capture`
+prints one `OUTCOME ` line and the referee publishes it as contract. Until
+0.1.3 there was no such line and this matched a sentence instead -- which
+worked, and rested on nothing.
 """
 
 from __future__ import annotations
@@ -31,11 +36,19 @@ from ..collector import Capture, CollectError, Target, normalise_capture
 #: the contract.
 DIGEST_LINE = re.compile(r"\bdigest\s+(sha256:[0-9a-f]{64})\b")
 
-#: How the referee announces that it did not walk. **Matched as prose, because
-#: prose is the only signal it gives**: the skip exits 0, like a walk. Anchored
-#: on the two words that carry the meaning rather than the whole sentence, which
-#: also names a timestamp and a count.
-UNCHANGED_LINE = re.compile(r"\bsensor set unchanged\b")
+#: The referee's declared outcome line, published as CONTRACT from 0.1.3.
+#:
+#: **This used to match a printed sentence**, because until 0.1.3 that was the
+#: only signal a skip gave: it exits `0` like a walk, and writes no file like a
+#: failure. Prose can be reworded without that reading as a breaking change, so
+#: the match was a guess with no promise behind it. Reported as issue #6 and
+#: closed there; the pin floor moved to `>=0.1.3` to consume it.
+OUTCOME_LINE = re.compile(r"^OUTCOME (\w+)$", re.MULTILINE)
+
+#: The values this build knows how to act on. A value outside it is `2`, not a
+#: guess -- a vocabulary that grew a member is exactly the case where guessing
+#: silently picks the wrong branch.
+OUTCOMES = {"walked", "unchanged"}
 
 DEFAULT_COMMAND = ("bmc-sensor-audit",)
 
@@ -86,20 +99,24 @@ class SubprocessBackend:
             found = DIGEST_LINE.search(completed.stdout or "")
             if found:
                 capture.reported_digest = found.group(1)
-            if capture.exit_code == CLEAN and not out.is_file():
-                # **A skip and a silent failure look identical from here**: exit
-                # 0 and no file, because the out path is a fresh temporary
-                # directory every call. The referee distinguishes them only in
-                # prose, so this reads the prose -- and says so rather than
-                # pretending the signal is structural. Filed upstream; see the
-                # module docstring in `collect/collector.py`.
-                if UNCHANGED_LINE.search(completed.stdout or ""):
+            if capture.exit_code == CLEAN:
+                found = OUTCOME_LINE.search(completed.stdout or "")
+                outcome = found.group(1) if found else None
+                if outcome is not None and outcome not in OUTCOMES:
+                    # The contract grew a value this build has never seen.
+                    # Guessing which branch it means is how a consumer silently
+                    # does the wrong thing for a whole fleet.
+                    return Capture(2, detail=(
+                        f"the tool reported OUTCOME {outcome!r}, which this "
+                        f"build does not know how to act on"))
+                if outcome == "unchanged":
                     return Capture(CLEAN, unchanged=True,
                                    detail="the BMC reports its sensor set "
                                           "unchanged; not re-walked")
-                return Capture(
-                    2, detail=f"the tool exited 0 and wrote no file at {out}")
-            if capture.exit_code == CLEAN:
+                if not out.is_file():
+                    return Capture(2, detail=(
+                        f"the tool exited 0, reported OUTCOME {outcome or '(none)'} "
+                        f"and wrote no file at {out}"))
                 capture.raw = out.read_bytes()
             return capture
 

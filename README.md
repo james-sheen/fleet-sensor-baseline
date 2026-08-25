@@ -6,7 +6,7 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.1.2**, tagged `v0.1.2`, Apache-2.0, on PyPI as
+**Released — 0.1.3**, tagged `v0.1.3`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
 
 ---
@@ -191,15 +191,15 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 229 |
-| of those, requiring `bmc-sensor-audit` | 27 |
+| tests collected | 233 |
+| of those, requiring `bmc-sensor-audit` | 31 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and
 the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Run it dependency-free and the 27 skip. Install the referee and they run.
+Run it dependency-free and the 31 skip. Install the referee and they run.
 
 **No pass/skip tally is quoted here on purpose.** The first version of this
 section did, and both numbers were wrong within a day — not because tests
@@ -218,11 +218,17 @@ a walk with the referee's own reader and asserts the fixture still matches.
 
 ## Upstream
 
-Pinned at `bmc-sensor-audit>=0.1.2,<0.2`, and the floor is **derived, not
-chosen**. It was `>=0.1.1` — enough for `validate-walk` and the handle from
-`capture --print-digest`. It moved because the collector now passes
-`--password-env`, so a credential never crosses argv, and declares an added
-aggregation prefix in one entry. Neither exists in 0.1.1.
+Pinned at `bmc-sensor-audit>=0.1.3,<0.2`, and the floor is **derived, not
+chosen**. It has moved twice in a day, each time to consume something reported
+from here:
+
+- `>=0.1.2` for `--password-env`, so a credential never crosses argv, and for
+  declaring an added aggregation prefix in one entry.
+- `>=0.1.3` for the `OUTCOME` line. The collector used to tell a skipped walk
+  from a real one by matching a printed **sentence**, because that was the only
+  signal there was — it worked and rested on nothing. 0.1.3 publishes a declared
+  line as contract, and `tests/test_seam.py` now checks this layer's accepted
+  values against the referee's own declared set rather than restating them.
 
 **Four gaps reported from here were fixed there**, and 0.1.2 is where they
 landed: conditional requests, certificate pinning, a password off argv, and a
