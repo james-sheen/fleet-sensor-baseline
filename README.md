@@ -6,8 +6,21 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.1.4**, tagged `v0.1.4`, Apache-2.0, on PyPI as
+**Released — 0.2.0**, tagged `v0.2.0`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
+
+**0.2.0 is a compatibility break, and it changes an answer.** The presence
+threshold was a single line, so a sensor either belonged to the baseline or was
+foreign to it — and at rack scale the majority won. On 24 trays where 2 lost a
+sensor, the sensor left the baseline and the **22 healthy trays** were reported
+as carrying something unexpected while the 2 that broke came back clean. There
+is a third state now: at or above `--present-threshold` it is expected, at or
+below `--absent-threshold` it is foreign, and between them the **cohort
+disagrees with itself**, which is a fact about the cohort and is charged to no
+unit. The baseline format goes to `fleet-baseline/2`; a `/1` file is refused
+rather than upgraded, because what is needed to judge was dropped when it was
+derived. `walk_ref` is derived instead of required, and an absent referee is
+told from a mute one.
 
 ---
 
@@ -269,9 +282,9 @@ a walk with the referee's own reader and asserts the fixture still matches.
 
 ## Upstream
 
-Pinned at `bmc-sensor-audit>=0.1.5,<0.2`, and the floor is **derived, not
-chosen**. It has moved twice in a day, each time to consume something reported
-from here:
+Pinned at `bmc-sensor-audit>=0.2.0,<0.3`, and the floor is **derived, not
+chosen**. It has moved three times, each time to consume something reported from
+here:
 
 - `>=0.1.2` for `--password-env`, so a credential never crosses argv, and for
   declaring an added aggregation prefix in one entry.
@@ -280,6 +293,11 @@ from here:
   handler by scheme, so the pinned handler was never consulted), and once that
   was refused, the refusal escaped as a traceback exiting `1` — *findings* — so
   a collector read a misconfigured flag as a machine with problems.
+- `>=0.2.0` for `--version`, which is what makes the referee probe enforcing. It
+  reads the version from the referee that answers on `PATH`, not the one pip
+  resolved into this environment, because those are different objects and the
+  guard that checked the second one passed in exactly the case it existed for.
+  Below this floor the probe can only say it could not tell.
 - `>=0.1.3` for the `OUTCOME` line. The collector used to tell a skipped walk
   from a real one by matching a printed **sentence**, because that was the only
   signal there was — it worked and rested on nothing. 0.1.3 publishes a declared

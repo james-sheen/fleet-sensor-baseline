@@ -64,7 +64,13 @@ dependencies = []
 # family's vocabulary -- so a collector read a misconfigured flag as a machine
 # with problems. 0.1.5 makes it exit 2. Two defects in one feature, both found
 # by writing the end-to-end test honestly rather than by inspecting a client.
-collect = ["bmc-sensor-audit>=0.1.5,<0.2"]
+#
+# **And to 0.2.0, which is what arms the version probe.** From 0.2.0 the referee
+# answers `--version`, so a referee that cannot report one is CONCLUSIVELY below
+# this floor rather than merely old, and `preflight()` can refuse instead of
+# saying it could not tell. That is the whole reason this floor moved: the check
+# was written before the thing it checks existed.
+collect = ["bmc-sensor-audit>=0.2.0,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]
