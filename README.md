@@ -6,8 +6,16 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.2.0**, tagged `v0.2.0`, Apache-2.0, on PyPI as
+**Released — 0.2.1**, tagged `v0.2.1`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
+
+**0.2.1 closes the seam with the referee, and fixes a validator that could
+not check the one file it most needed to.** `baseline --for-referee` writes the
+referee's declaration-source format, which both projects described and neither
+produced; it comes out as a candidate nobody has signed, and it does not declare
+the sensors the cohort disagreed about. Separately, `validate` refused every
+`targets/2` file while naming `targets/2` among the formats it read — so the
+format that exists to carry `pin_sha256` was the one the checker would not check.
 
 **0.2.0 is a compatibility break, and it changes an answer.** The presence
 threshold was a single line, so a sensor either belonged to the baseline or was
