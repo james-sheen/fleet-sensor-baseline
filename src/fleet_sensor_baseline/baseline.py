@@ -1,4 +1,4 @@
-"""Deriving a `fleet-baseline/1` -- an additional, labeled, downgraded declaration.
+"""Deriving a `fleet-baseline/2` -- an additional, labeled, downgraded declaration.
 
 **Wherever a manufacturer declaration exists, it wins.** A fleet-derived
 baseline is blind to an absence the whole cohort shares, which is the founding
@@ -181,7 +181,7 @@ def derive(present_by_unit: dict[str, set[str]],
            absent_threshold: float = DEFAULT_ABSENT_THRESHOLD,
            floor: int = DEFAULT_FLOOR,
            window: tuple[str, str] | None = None) -> dict:
-    """Build the `fleet-baseline/1`. Raises `BaselineError` below the floor."""
+    """Build the `fleet-baseline/2`. Raises `BaselineError` below the floor."""
     total = len(present_by_unit)
     if total == 0:
         raise BaselineError(

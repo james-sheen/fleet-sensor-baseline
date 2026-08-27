@@ -30,7 +30,10 @@ import sys
 
 import pytest
 
-from conftest import walk as fixture_walk
+from conftest import walk as fixture_walk, write_json
+from fleet_sensor_baseline.baseline import derive
+from fleet_sensor_baseline.for_referee import (REFEREE_BASELINE_FORMAT,
+                                               declaration_from_baseline)
 from fleet_sensor_baseline.store import digest_bytes
 from fleet_sensor_baseline.walk import (WALK_FORMAT, WalkError, parse_prefix_map,
                                         sensor_names, sensor_paths)
@@ -568,3 +571,127 @@ class TestTheTlsFlagsExistOnTheReferee:
         assert capture.exit_code == 2, (
             "a walk under a pin that could not be honoured came back clean")
 
+
+@NEEDS_TOOL
+class TestTheExportedDeclarationIsWhatTheRefereeReads:
+    """`baseline --for-referee`, handed to the program it was written for.
+
+    **This is the test the feature rests on.** `for_referee.py` spells the
+    referee's format key as a literal because this layer does not import the
+    referee -- and a literal copied out of another program's source is a claim
+    about that program that only that program can settle. The two `OLD=NEW`
+    dialects parted silently for exactly this reason: the mirror never looked
+    upstream.
+
+    So all three checks below run the real `bmc-sensor-audit` and read its exit
+    code: refused as a candidate, consumed once reviewed, and -- the one that
+    matters -- a unit that lacks the divergent sensor coming back CLEAN because
+    the sensor was not declared.
+    """
+
+    SENSORS = ("Fan_CPU_1", "Fan_CPU_2", "Inlet_Temp")
+    DIVERGENT = "Fan_CPU_2"
+
+    @staticmethod
+    def _config(tmp_path):
+        """An entity-manager file declaring one sensor, so the layering is
+        real: the manufacturer wins where it declares and the fleet source
+        covers the rest."""
+        path = tmp_path / "em.json"
+        write_json(path, [{"Name": "Chassis",
+                           "Exposes": [{"Name": "Fan_CPU_1",
+                                        "Type": "AspeedFan"}]}])
+        return path
+
+    def _baseline(self):
+        """22 of 24 units carrying the divergent sensor."""
+        present, paths = {}, {}
+        for index in range(1, 25):
+            unit = f"tray-{index:02d}"
+            have = set(self.SENSORS)
+            if unit in ("tray-06", "tray-07"):
+                have.discard(self.DIVERGENT)
+            present[unit] = have
+            paths[unit] = {n: f"/redfish/v1/Chassis/1/Sensors/{n}"
+                           for n in have}
+        return derive(present, paths, scope={"model": "GB200-NVL-tray"})
+
+    @staticmethod
+    def _coverage(config, walk_path, declaration):
+        return subprocess.run(
+            [TOOL, "coverage", "--config", str(config),
+             "--walk", str(walk_path), "--declaration", str(declaration)],
+            capture_output=True, text=True)
+
+    @pytest.fixture
+    def walk_file(self, tmp_path, real_walk):
+        """A walk of a unit that HAS every sensor, written by the referee."""
+        path = tmp_path / "walk.json"
+        write_json(path, real_walk)
+        return path
+
+    @pytest.fixture
+    def declaration(self, tmp_path):
+        path = tmp_path / "declaration.json"
+        write_json(path, declaration_from_baseline(self._baseline()))
+        return path
+
+    def test_the_candidate_is_refused_by_the_real_referee(self, tmp_path,
+                                                          walk_file,
+                                                          declaration):
+        """Exit 2, not 1. A file nobody has asserted is INCOMPLETE, and a
+        family that reported it as findings would have a fleet collector read
+        an unreviewed export as *this machine has problems*."""
+        done = self._coverage(self._config(tmp_path), walk_file, declaration)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "CANDIDATE" in done.stdout + done.stderr
+
+    def test_it_is_consumed_once_somebody_reviews_it(self, tmp_path, walk_file,
+                                                     declaration):
+        payload = json.loads(declaration.read_text())
+        payload["reviewed"] = {"by": "a-person", "on": "2026-08-27"}
+        reviewed = tmp_path / "reviewed.json"
+        write_json(reviewed, payload)
+
+        done = self._coverage(self._config(tmp_path), walk_file, reviewed)
+        assert done.returncode == 0, done.stdout + done.stderr
+        # The provenance block, printed ABOVE the counts, naming this layer as
+        # the source and carrying the downgrade sentence.
+        assert REFEREE_BASELINE_FORMAT in done.stdout
+        assert "GB200-NVL-tray" in done.stdout
+        assert "reviewed by a-person" in done.stdout
+
+    def test_the_unit_that_lacks_the_divergent_sensor_is_clean(self, tmp_path,
+                                                              real_walk,
+                                                              declaration):
+        """**The inversion, refused one tool further out.**
+
+        `tray-06` is one of the two units that lost `Fan_CPU_2`. Because the
+        cohort disagreed about that sensor it was not declared, so the referee
+        does not expect it and the unit is clean. The counterfactual below
+        declares it anyway and the same unit is charged -- which is what makes
+        this an assertion about the export rather than about the walk.
+        """
+        lacking = dict(real_walk, sensors=[s for s in real_walk["sensors"]
+                                           if s["name"] != self.DIVERGENT])
+        walk_path = tmp_path / "tray-06.json"
+        write_json(walk_path, lacking)
+
+        payload = json.loads(declaration.read_text())
+        payload["reviewed"] = {"by": "a-person", "on": "2026-08-27"}
+        reviewed = tmp_path / "reviewed.json"
+        write_json(reviewed, payload)
+
+        as_exported = self._coverage(self._config(tmp_path), walk_path, reviewed)
+        assert as_exported.returncode == 0, as_exported.stdout + as_exported.stderr
+
+        payload["sensors"].append({"name": self.DIVERGENT})
+        counterfactual = tmp_path / "counterfactual.json"
+        write_json(counterfactual, payload)
+        charged = self._coverage(self._config(tmp_path), walk_path,
+                                 counterfactual)
+        assert charged.returncode == 1, (
+            "declaring the divergent sensor no longer charges the unit that "
+            "lacks it, so this test can no longer tell the two apart and "
+            "proves nothing about the export")
+        assert self.DIVERGENT in charged.stdout

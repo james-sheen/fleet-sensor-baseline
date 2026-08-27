@@ -17,14 +17,16 @@ import json
 import pytest
 
 from conftest import digest_of, walk, write_json
+from fleet_sensor_baseline.for_referee import REFEREE_BASELINE_FORMAT
 from fleet_sensor_baseline import cli
 from fleet_sensor_baseline.exits import CLEAN, INCOMPLETE
 from fleet_sensor_baseline import formats
 from fleet_sensor_baseline.formats import (BASELINE_FORMAT, DOWNGRADE_NOTICE,
-                                           TARGETS_V2_FORMAT,
+                                           FORMATS, TARGETS_V2_FORMAT,
                                            PROVENANCE_DERIVED, RECORD_FORMAT,
                                            SUMMARY_FORMAT, TARGETS_FORMAT,
-                                           validate_any, validate_baseline,
+                                           VALIDATORS, validate_any,
+                                           validate_baseline,
                                            validate_record, validate_summary,
                                            validate_targets)
 
@@ -68,12 +70,96 @@ GOOD_TARGETS = {
                  "topology": {"satellite": "hmc-0"}}],
 }
 
+GOOD_TARGETS_V2 = {
+    "format": TARGETS_V2_FORMAT,
+    "targets": [{"unit_key": "h-0042", "base_url": "https://192.0.2.1",
+                 "pin_sha256": "AB" * 32,
+                 "topology": {"satellite": "hmc-0"}}],
+}
+
 CASES = [
     ("record", GOOD_RECORD, validate_record),
     ("baseline", GOOD_BASELINE, validate_baseline),
     ("summary", GOOD_SUMMARY, validate_summary),
     ("targets", GOOD_TARGETS, validate_targets),
+    ("targets/2", GOOD_TARGETS_V2, validate_targets),
 ]
+
+#: Format keys with no entry in `CASES`, each with the reason WRITTEN DOWN.
+#:
+#: An exemption that is merely absent is indistinguishable from a member
+#: somebody forgot, which is the whole defect below. Naming it costs one line
+#: and makes the omission a decision.
+NO_REFERENCE_ARTIFACT = {
+    formats.BASELINE_V1_FORMAT:
+        "superseded and refused by design, so there is no good one to check",
+}
+
+
+class TestEveryDeclaredFormatIsDispatchable:
+    """The format set, written four times, and two of the copies had drifted.
+
+    `FORMATS` says what this build reads. `VALIDATORS` says what `validate`
+    can dispatch. `targets/2` was in the first and not the second, so
+    `validate` refused every `targets/2` file -- with a message that listed
+    `targets/2` among the formats it had just said it read. `validate_targets`
+    handled both versions from the day `/2` landed: the function was complete
+    and only the wiring was missing.
+
+    **The format it locked out is the one that exists to carry `pin_sha256`.**
+    So the file an operator most needs checked before a run -- the one
+    declaring which certificate the collector must see -- was the one file
+    `validate` would not check, and the `pin_sha256`-on-`http://` refusal
+    inside `validate_targets` was unreachable from the command line entirely.
+
+    Nothing went red because every `targets/2` test called the validator
+    **directly**. `TestTheGoodOnePasses` does go through the dispatcher, but it
+    runs over `CASES`, a third hand-written copy of the same set, missing the
+    same member. A check whose population is transcribed is blind to precisely
+    what the transcription forgot. These derive the population instead.
+    """
+
+    def test_every_format_this_build_reads_has_a_validator(self):
+        missing = [f for f in FORMATS if f not in VALIDATORS]
+        assert not missing, (
+            f"{missing} are in FORMATS and not in VALIDATORS, so `validate` "
+            f"refuses them while naming them in the list of formats it reads")
+
+    def test_no_validator_is_registered_for_a_format_that_is_not_declared(self):
+        """The other direction. A validator reachable for a key `FORMATS` does
+        not list is a format this build reads and does not admit to reading."""
+        extra = [f for f in VALIDATORS if f not in FORMATS]
+        assert not extra, f"{extra} dispatch and are not declared in FORMATS"
+
+    @pytest.mark.parametrize("declared", FORMATS)
+    def test_the_dispatcher_recognises_it_by_name(self, declared):
+        """Recognition, not acceptance. An empty artifact is refused by every
+        validator here; what is asserted is that the dispatcher NAMED the
+        format rather than falling through to `this build reads ...`."""
+        kind, problems = validate_any({"format": declared})
+        assert kind == declared, (
+            f"validate_any fell through on {declared!r}, which FORMATS "
+            f"declares this build reads")
+        assert problems, (
+            f"an artifact carrying nothing but a format key validated as "
+            f"{declared!r}")
+
+    def test_an_undeclared_format_still_falls_through(self):
+        """Non-vacuity. If the dispatcher recognised everything the three
+        assertions above would hold for a table that had been deleted."""
+        kind, problems = validate_any({"format": "fleet-sensor-baseline/nope/1"})
+        assert kind is None and problems
+
+    @pytest.mark.parametrize("declared", FORMATS)
+    def test_it_has_a_reference_artifact_or_a_written_reason(self, declared):
+        """`CASES` is the fourth copy. This is what keeps it from drifting too:
+        a new format arrives with a good artifact, or with a sentence saying
+        why there cannot be one."""
+        covered = {good["format"] for _, good, _ in CASES}
+        assert declared in covered or declared in NO_REFERENCE_ARTIFACT, (
+            f"{declared!r} is in FORMATS with no entry in CASES and no reason "
+            f"in NO_REFERENCE_ARTIFACT, so no malformation battery runs "
+            f"against it")
 
 
 @pytest.mark.parametrize("name,good,check", CASES)
@@ -354,3 +440,111 @@ class TestWalkRefIsDerivedNotSupplied:
         from fleet_sensor_baseline import store as store_module
         for digest in ("sha256:" + "a" * 64, "sha256:" + "0123abcd" * 8):
             assert formats.ref_for(digest) == store_module.ref_for(digest)
+
+
+class TestNoSurfaceNamesAStaleFormatVersion:
+    """Help text and prose, compared against the constants they describe.
+
+    `baseline` emitted `/2` from the release that added it, and the top-level
+    `--help` went on offering to *derive a fleet-baseline/1* -- the first line
+    a new reader meets, naming a format this build refuses. Two module
+    docstrings and a validator docstring said the same. None of it was reached
+    by a test, because a version inside a sentence is prose to everything that
+    reads prose and a constant to nobody.
+
+    The remedy is not a better sentence, it is one fewer copy: `short()`
+    derives the display name, and these assert that nothing has gone back to
+    spelling it by hand.
+    """
+
+    @staticmethod
+    def _baseline_help():
+        from fleet_sensor_baseline import cli
+        group = cli.build_parser()._subparsers._group_actions[0]
+        return next(action.help for action in group._get_subactions()
+                    if action.dest == "baseline")
+
+    def test_the_baseline_help_names_the_format_it_emits(self):
+        assert formats.short(BASELINE_FORMAT) in self._baseline_help()
+
+    def test_it_does_not_name_the_superseded_one(self):
+        assert formats.short(formats.BASELINE_V1_FORMAT) not in \
+            self._baseline_help(), (
+            "the help offers to derive a format this build refuses to read")
+
+    def test_short_is_derived_and_not_a_second_spelling(self):
+        """Non-vacuity, and the reason the helper exists at all."""
+        assert formats.short(BASELINE_FORMAT) == "fleet-baseline/2"
+        assert formats.short(RECORD_FORMAT) == "fleet-record/1"
+        assert all(formats.short(f) in f for f in FORMATS)
+
+    @pytest.mark.parametrize("module", ["baseline", "formats", "cli",
+                                        "for_referee"])
+    def test_no_module_docstring_names_the_superseded_baseline_as_current(
+            self, module):
+        """A grep, but a narrow one: the superseded key may be NAMED -- three
+        modules legitimately explain why it is refused -- so this looks only
+        for the phrase that presents it as the thing being produced."""
+        import importlib
+        source = importlib.import_module(
+            f"fleet_sensor_baseline.{module}").__doc__ or ""
+        stale = formats.short(formats.BASELINE_V1_FORMAT)
+        for verb in ("Deriving a", "derive a", "Build the", "Check one"):
+            assert f"{verb} `{stale}`" not in source, (
+                f"{module} still describes producing {stale}")
+
+
+class TestThisDocumentNamesEveryFormat:
+    """`docs/formats.md`, checked against the constants it documents.
+
+    The README's format count is pinned by `test_readme_counts.py` and stayed
+    right. This page had no tripwire and went stale in the same release: it
+    opened *Four*, presented the superseded `fleet-baseline/1` as current, and
+    never mentioned `targets/2` or the `divergent` band -- while the README,
+    three links away, said six. **The unguarded copy is the one that drifts,
+    and which copy is guarded is not a property of how important it is.**
+
+    A document cannot be checked for being right. It can be checked for naming
+    everything the code exports, which is the failure this one actually had.
+    """
+
+    @staticmethod
+    def _doc():
+        from pathlib import Path
+        path = Path(__file__).resolve().parent.parent / "docs" / "formats.md"
+        if not path.exists():          # pragma: no cover - sdist without docs
+            pytest.skip(f"{path} is not present in this tree, so the document "
+                        f"could not be checked. That is not a passing check")
+        return path.read_text()
+
+    @pytest.mark.parametrize("declared", FORMATS)
+    def test_every_format_this_build_reads_has_a_section(self, declared):
+        assert f"## `{declared}`" in self._doc(), (
+            f"{declared} is in FORMATS and has no section in docs/formats.md")
+
+    def test_the_format_this_build_writes_for_the_referee_has_one(self):
+        """It is not in `FORMATS` -- nothing here reads it -- and a reader who
+        meets `--for-referee` still arrives at this page looking for it."""
+        assert f"## `{REFEREE_BASELINE_FORMAT}`" in self._doc()
+
+    def test_the_stated_count_is_the_measured_one(self):
+        """The opening word. It said *Four* through two releases that made it
+        six, which is the whole reason this class exists."""
+        words = {4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight"}
+        expected = words[len(FORMATS)]
+        assert self._doc().lstrip().startswith(f"# Formats\n\n{expected} "), (
+            f"docs/formats.md does not open by naming {expected.lower()} "
+            f"formats, and FORMATS has {len(FORMATS)}")
+
+    def test_the_superseded_one_is_marked_superseded(self):
+        """Named is not enough. A section that merely exists reads as current,
+        which is exactly how `/1` went on looking like the thing to derive."""
+        doc = self._doc()
+        section = doc[doc.index(f"## `{formats.BASELINE_V1_FORMAT}`"):]
+        section = section[:section.index("\n## ")]
+        assert "Superseded" in section and "Refused" in section
+
+    def test_the_divergent_key_is_documented(self):
+        """The key the format was bumped FOR. A page describing `/2` without it
+        describes `/1` under a new name."""
+        assert "divergent" in self._doc()

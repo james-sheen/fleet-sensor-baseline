@@ -23,7 +23,9 @@ from .baseline import (BaselineError, DEFAULT_ABSENT_THRESHOLD,
                        latest_per_unit, select)
 from .drift import steps
 from .exits import CLEAN, FINDINGS, INCOMPLETE, worst
-from .formats import (BASELINE_FORMAT, RECORD_FORMAT, validate_any,
+from .for_referee import (RefereeExportError, declaration_from_baseline,
+                          export_preamble)
+from .formats import (BASELINE_FORMAT, RECORD_FORMAT, short, validate_any,
                       validate_record)
 from .outliers import compare, divergences
 from .report import baseline_preamble, render, summary
@@ -256,6 +258,36 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
           f"{artifact['derived']['units']} unit(s){tail} -> {args.out}")
     for line in baseline_preamble(artifact):
         print(f"  {line}")
+
+    if args.for_referee is None and args.for_referee_platform is not None:
+        # A flag that quietly does nothing is the failure this family exists to
+        # refuse -- the referee's own `--pin-sha256` was built, dropped and
+        # ignored on an `http://` target for four releases. Somebody naming a
+        # platform has asked for the export.
+        print("baseline: --for-referee-platform names the platform for "
+              "--for-referee, which was not given, so nothing would be "
+              "written. Add --for-referee PATH, or drop the flag",
+              file=sys.stderr)
+        return INCOMPLETE
+
+    if args.for_referee is not None:
+        try:
+            declaration = declaration_from_baseline(
+                artifact, platform=args.for_referee_platform)
+        except RefereeExportError as exc:
+            # The baseline itself was written and is good. Only the export
+            # failed, and saying so is the difference between a derivation an
+            # operator can keep and one they think they have to run again.
+            print(f"baseline: --for-referee: {exc}", file=sys.stderr)
+            return INCOMPLETE
+        Path(args.for_referee).write_text(
+            json.dumps(declaration, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
+        print(f"baseline: {len(declaration['sensors'])} sensor(s) declared to "
+              f"the referee -> {args.for_referee}")
+        for line in export_preamble(declaration):
+            print(f"  {line}")
+
     return CLEAN if not unreadable else INCOMPLETE
 
 
@@ -529,7 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.set_defaults(func=_cmd_ingest, payload_for={})
 
     baseline = subparsers.add_parser(
-        "baseline", help="derive a fleet-baseline/1 from stored records")
+        "baseline", help=f"derive a {short(BASELINE_FORMAT)} from stored records")
     store_arg(baseline)
     window(baseline)
     baseline.add_argument("--model", help="declared model, matched exactly")
@@ -551,6 +583,16 @@ def build_parser() -> argparse.ArgumentParser:
                           help=f"refuse a cohort smaller than this "
                                f"(default {DEFAULT_FLOOR})")
     baseline.add_argument("--out", required=True)
+    baseline.add_argument(
+        "--for-referee", metavar="PATH",
+        help="also write a bmc-sensor-audit declaration-source CANDIDATE, for "
+             "coverage --declaration. It carries no reviewed marker, so the "
+             "referee refuses it until somebody puts their name to it, and it "
+             "does not declare the sensors the cohort disagreed about")
+    baseline.add_argument(
+        "--for-referee-platform", metavar="NAME",
+        help="the platform to name in that file, when the cohort was not "
+             "scoped with --model")
     baseline.set_defaults(func=_cmd_baseline)
 
     outliers = subparsers.add_parser(

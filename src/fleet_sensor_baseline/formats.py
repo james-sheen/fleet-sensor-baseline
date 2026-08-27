@@ -62,13 +62,33 @@ TARGETS_FORMATS = (TARGETS_FORMAT, TARGETS_V2_FORMAT)
 #: without colons and in either case.
 PIN_SHA256 = re.compile(r"^(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$|^[0-9A-Fa-f]{64}$")
 
+def short(format_key: str) -> str:
+    """`fleet-sensor-baseline/fleet-baseline/2` -> `fleet-baseline/2`.
+
+    Prose and help text name formats without the package prefix, and every
+    place that did so spelled the version by hand. Three of those copies still
+    said `/1` two releases after `/2` shipped -- including the top-level help
+    for the command that emits it, which is the first thing a reader sees. A
+    name derived from the constant cannot drift from it.
+    """
+    return "/".join(format_key.split("/")[-2:])
+
+
+#: The referee's declaration-source format, which `baseline --for-referee`
+#: writes and nothing here reads. Spelled here as well as in `for_referee` so
+#: `validate` can refuse it by name without importing that module back --
+#: `for_referee` imports this one, and the arrow only points one way.
+#: `tests/test_formats.py` pins the two spellings equal.
+REFEREE_BASELINE_FORMAT = "bmc-sensor-audit/fleet-baseline/1"
+
 #: Every format key this build writes and reads, for `validate` to dispatch on.
 FORMATS = (RECORD_FORMAT, BASELINE_V1_FORMAT, BASELINE_FORMAT,
            SUMMARY_FORMAT, TARGETS_FORMAT,
            TARGETS_V2_FORMAT)
 
 #: **Part of the format, not of the renderer.** Every consumer that judges
-#: against a `fleet-baseline/1` prints this sentence. A fleet-derived baseline
+#: against a `fleet-baseline/2` prints this sentence, and it crosses into a
+#: `bmc-sensor-audit` declaration on export. A fleet-derived baseline
 #: is blind to an absence the whole cohort shares -- which is the founding
 #: problem of this family, fleet-sized -- and a reader who is not told that will
 #: read a clean outlier report as a clean fleet.
@@ -232,7 +252,7 @@ def validate_baseline_v1(payload: Any) -> list[str]:
 
 
 def validate_baseline(payload: Any) -> list[str]:
-    """Check one `fleet-baseline/1`.
+    """Check one `fleet-baseline/2`.
 
     **The notice and the provenance are checked as format, not as prose.** A
     baseline that lost its downgrade notice validates as a manufacturer
@@ -411,12 +431,24 @@ def validate_targets(payload: Any) -> list[str]:
 
 #: Format key -> validator, so `validate PATH` dispatches on what the file says
 #: it is rather than on what the caller guessed from the filename.
+#:
+#: **Every key in `FORMATS` must appear here**, and a test pins the two sets
+#: equal rather than trusting this table to be updated. It was not:
+#: `targets/2` shipped in `FORMATS` and not here, so `validate` refused every
+#: `targets/2` file while naming `targets/2` in the list of formats it said it
+#: read. `validate_targets` had handled both versions from the day `/2` landed
+#: -- the function was complete and only the wiring was missing, which is why
+#: nothing went red: every test called the validator directly and none of them
+#: went through this table. The format it locked out is the one that exists to
+#: carry `pin_sha256`, so the one artifact a reviewer most needs checked was
+#: the one artifact that could not be.
 VALIDATORS = {
     RECORD_FORMAT: validate_record,
     BASELINE_V1_FORMAT: validate_baseline_v1,
     BASELINE_FORMAT: validate_baseline,
     SUMMARY_FORMAT: validate_summary,
     TARGETS_FORMAT: validate_targets,
+    TARGETS_V2_FORMAT: validate_targets,
 }
 
 
@@ -430,6 +462,16 @@ def validate_any(payload: Any) -> tuple[str | None, list[str]]:
     if not isinstance(payload, dict):
         return None, [f"the artifact is {_kind(payload)}, not an object"]
     declared = payload.get("format")
+    if declared == REFEREE_BASELINE_FORMAT:
+        # This build WRITES this one and cannot check it. Saying so, and naming
+        # the reader, is the difference between a refusal and a dead end: the
+        # file came out of `baseline --for-referee` a moment earlier, so a bare
+        # *this build reads ...* reads as the export having gone wrong.
+        return None, [
+            f"format is {declared!r}, which this build writes and does not "
+            f"read. It is a bmc-sensor-audit declaration source: check it with "
+            f"`bmc-sensor-audit coverage --declaration`, which refuses it until "
+            f"it carries a reviewed marker"]
     if declared not in VALIDATORS:
         return None, [
             f"format is {declared!r}; this build reads "

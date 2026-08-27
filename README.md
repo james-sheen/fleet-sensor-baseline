@@ -71,10 +71,48 @@ fleet-sensor-baseline verdict --store fleet-store --expect-units racks.txt
 # check any artifact against the format it declares
 fleet-sensor-baseline validate baseline.json
 
+# hand the cohort's baseline back to the referee, as a candidate
+fleet-sensor-baseline baseline --store fleet-store --model GB200-NVL-tray \
+    --out baseline.json --for-referee declaration.json
+
 # walk a rack of BMCs yourself, serially, and file what comes back
 fleet-sensor-baseline collect --targets rack-17.json --store fleet-store \
     --collector-id rack-17
 ```
+
+### Handing a baseline back to the referee
+
+`--for-referee PATH` writes the cohort's baseline a second time, in
+`bmc-sensor-audit/fleet-baseline/1` — the referee's own declaration-source
+format, for `coverage --declaration`. It is the third source in that tool's
+precedence, under entity-manager and under a reviewed `pdr/1`.
+
+**It comes out as a candidate.** `"reviewed": null`, so the referee refuses to
+consume it until a person adds their name and a date. The conversion is not the
+review: a baseline derived from a fleet of unprovisioned boards is an empty
+declaration that reads healthy against every other unprovisioned board, and at
+fleet scale consensus makes that answer look corroborated. A marker this tool
+could write is a marker nobody put their name to, so there is no flag to write
+one.
+
+**The sensors the cohort disagreed about are not declared.** That band exists
+because a proportion is a coarse instrument at rack scale; the referee's format
+has two states, not three, and declaring a divergent sensor would expect it of
+every unit while 8 percent of the fleet does not have it — charging each of
+those units a finding for a fact about the cohort. That is the 0.1.x inversion,
+reached through a different door. They are written into the file under
+`divergent_not_declared`, which the referee ignores by its own `/1` rule, and
+named on stderr at export: the reviewer is the reader who needs them.
+
+The cohort must be scoped to one model — `--model`, or `--for-referee-platform`
+to name it directly — because the referee requires a platform on every
+declaration and a cohort spanning models has no single answer.
+
+`tests/test_seam.py::TestTheExportedDeclarationIsWhatTheRefereeReads` runs the
+real `bmc-sensor-audit` against a file this emits: refused as a candidate,
+consumed once reviewed, and the unit that lost the divergent sensor coming back
+clean — with the counterfactual that declares it anyway and watches the same
+unit get charged.
 
 ### Asking before walking
 
@@ -150,8 +188,10 @@ renders incompleteness as silence renders a dead collector as a clean rack.
    is never the source of judgment. Silence cannot impersonate a pass.
 2. **Never metric values.** This audits presence and configuration, not readings.
 3. **Never majority-truth over declarations.** A fleet-derived baseline is an
-   *additional, labeled, downgraded* declaration source. Wherever a manufacturer
-   declaration exists, it wins.
+   *additional, labeled, downgraded* declaration source — reachable through
+   `baseline --for-referee`, which writes the referee's own format as a
+   candidate nobody has signed yet. Wherever a manufacturer declaration exists,
+   it wins.
 4. **Never identity inside the referee's artifacts.** The walk payload carries no
    `unit_key`. Identity binds here.
 
@@ -191,9 +231,7 @@ key the file declares rather than on a shape guessed from the fields present.
 
 See [docs/formats.md](docs/formats.md).
 
-## Storage
-
-### When the cohort disagrees with itself
+## When the cohort disagrees with itself
 
 A sensor is **expected** at or above `--present-threshold` (0.99), **foreign** at
 or below `--absent-threshold` (0.01), and between the two the cohort simply
@@ -243,9 +281,16 @@ to surface; presence across the cohort is the union across a unit's surfaces.
 ## The boundary
 
 This package **never imports `bmc_sensor_audit`**. It reads exit codes, stdout and
-the files the tool writes. One module is exempt — `collect/backends/mock.py`, which
-imports the referee's `MockBMC`, and the distinction is the design: that is a fake
-*machine*, standing in for the thing being walked, not the thing doing the walking.
+the files the tool writes. One module is exempt — `collect/backends/mock.py` — and
+the distinction is the design: it stands in for the thing being walked, not the
+thing doing the walking.
+
+It imports the referee's mock BMC *and* its `RedfishClient` and `walk_chassis`, so
+the payloads it produces are real `walk/1` files written by the real walker rather
+than approximations of them. The exemption is file-level and that is the actual
+contract `tests/test_boundary.py` enforces; an earlier version of this sentence
+named only the mock, which was narrower than the code and would have made a
+correct file look like a violation.
 
 `tests/test_boundary.py` asserts both halves by reading the source: that nothing
 else imports it, and that the mock backend still does. Without the second, the
@@ -255,15 +300,15 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 280 |
-| of those, requiring `bmc-sensor-audit` | 34 |
+| tests collected | 341 |
+| of those, requiring `bmc-sensor-audit` | 37 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and
 the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Run it dependency-free and the 34 skip. Install the referee and they run.
+Run it dependency-free and the 37 skip. Install the referee and they run.
 
 **No pass/skip tally is quoted here on purpose.** The first version of this
 section did, and both numbers were wrong within a day — not because tests

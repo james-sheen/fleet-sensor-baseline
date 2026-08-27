@@ -193,7 +193,11 @@ than absorbed:
   matches `\bsensor set unchanged\b`. That works and is the wrong kind of
   contract: prose can be reworded without it reading as a breaking change, while
   `walk/1`'s format string carries a written stability statement. Filed as
-  [#6](https://github.com/james-sheen/bmc-sensor-audit/issues/6), **open**.
+  [#6](https://github.com/james-sheen/bmc-sensor-audit/issues/6), **closed in
+  `bmc-sensor-audit` 0.1.3 and consumed here** -- Section 5 below is the same
+  ask, written up. This bullet said *open* for two days after the fix shipped,
+  while the table above and Section 5 both said consumed: one fact recorded in
+  three places, and the copy nobody re-read was the stale one.
 - A test assertion written expecting the old digest-dedup behaviour FAILED,
   which is how the *store collapses a homogeneous fleet* claim was finally
   measured and found false. See `store.py`.
