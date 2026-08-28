@@ -695,3 +695,77 @@ class TestTheExportedDeclarationIsWhatTheRefereeReads:
             "lacks it, so this test can no longer tell the two apart and "
             "proves nothing about the export")
         assert self.DIVERGENT in charged.stdout
+
+
+@NEEDS_TOOL
+class TestCompareHandsTwoStoredWalksToTheRealReferee:
+    """**The done-when for `compare`, against the program that judges.**
+
+    Everything in `tests/test_compare.py` drives a fake runner, so it proves
+    which two records are selected and nothing about what the referee makes of
+    them. A threshold edited between two captures is precisely the case the
+    collection-ETag probe cannot see -- and says it cannot -- so it is the case
+    this command exists for.
+    """
+
+    EARLY, LATE = "2026-08-01T00:00:00Z", "2026-08-20T00:00:00Z"
+
+    def _store(self, tmp_path, *, later_upper):
+        from fleet_sensor_baseline.store import Store
+        from conftest import record
+        store = Store(tmp_path / "store")
+        store.initialise()
+        rows = []
+        for when, upper in ((self.EARLY, 95.0), (self.LATE, later_upper)):
+            payload = fixture_walk(["INLET_TEMP", "FAN_1"], captured_at=when)
+            payload["fields_observed"] = True
+            payload["sensors"][0]["thresholds"] = {"upper/critical": upper}
+            raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+            rows.append(record("tray-01", captured_at=when,
+                               digest=store.put_payload(raw)))
+        store.append(rows)
+        return store
+
+    def _compare(self, store, capsys, *, before, after):
+        """fsb in process, the referee as a real subprocess.
+
+        The seam under test is this package handing walks to that program. A
+        second subprocess for the CLI itself would test the shell.
+        """
+        from fleet_sensor_baseline import cli
+        code = cli.main(["compare", "--store", str(store.root),
+                         "--unit", "tray-01", "--before", before,
+                         "--after", after])
+        captured = capsys.readouterr()
+        return code, captured.out + captured.err
+
+    def test_a_threshold_edited_between_two_walks_is_found_and_named(
+            self, tmp_path, capsys):
+        store = self._store(tmp_path, later_upper=105.0)
+        code, said = self._compare(store, capsys, before=self.EARLY,
+                                   after=self.LATE)
+        assert code == 1, said
+        assert "INLET_TEMP" in said, (
+            "the slot that moved is not named, so an operator has a verdict "
+            "and nowhere to look")
+        assert "95" in said and "105" in said
+
+    def test_and_an_unedited_pair_is_clean(self, tmp_path, capsys):
+        """Non-vacuity against the real referee. If the handover were broken in
+        a way that always reported drift, the test above would still pass."""
+        store = self._store(tmp_path, later_upper=95.0)
+        code, said = self._compare(store, capsys, before=self.EARLY,
+                                   after=self.LATE)
+        assert code == 0, said
+
+    def test_the_referees_ordering_refusal_arrives_untranslated(self, tmp_path,
+                                                                capsys):
+        """The referee refuses a backwards pair in better words than this layer
+        would write, and re-wording it would put a second author between the
+        operator and the reason. So it is passed through, and this asserts the
+        referee's own sentence rather than a paraphrase of it."""
+        store = self._store(tmp_path, later_upper=105.0)
+        code, said = self._compare(store, capsys, before=self.LATE,
+                                   after=self.EARLY)
+        assert code == 2
+        assert "the wrong way round" in said

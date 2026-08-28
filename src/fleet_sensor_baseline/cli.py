@@ -22,6 +22,7 @@ from .baseline import (BaselineError, DEFAULT_ABSENT_THRESHOLD,
                        divergent_names, expected_names,
                        latest_per_unit, select)
 from .drift import steps
+from .compare import CompareError, compare_unit
 from .exits import CLEAN, FINDINGS, INCOMPLETE, worst
 from .for_referee import (RefereeExportError, declaration_from_baseline,
                           export_preamble)
@@ -423,6 +424,36 @@ def _cmd_verdict(args: argparse.Namespace) -> int:
     return _emit(payload, "fleet", args)
 
 
+# -- compare --------------------------------------------------------------
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    store = Store(args.store)
+    try:
+        rows = compare_unit(store, args.unit, before=args.before,
+                            after=args.after,
+                            command=tuple(args.command.split()),
+                            strict_fields=args.strict_fields,
+                            prefixes=args.aggregation_prefix or [])
+    except (OSError, StoreError, CompareError) as exc:
+        print(f"compare: {exc}", file=sys.stderr)
+        return INCOMPLETE
+
+    payload = summary(
+        [row.to_dict() for row in rows],
+        judged_against=(f"the capture at or before {args.before}, against the "
+                        f"one at or before {args.after}"))
+    # The referee's own report is the answer; this layer chose the inputs. It
+    # is printed under the surface it belongs to rather than merged, because a
+    # unit answering on two BMCs gets two reports and a merged one would name
+    # no surface for either.
+    preamble = []
+    for row in rows:
+        if row.report:
+            preamble.append("/".join(row.surface) + ":")
+            preamble += [f"  {line}" for line in row.report.splitlines()]
+    return _emit(payload, "comparison", args, preamble)
+
+
 # -- validate -------------------------------------------------------------
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -626,6 +657,26 @@ def build_parser() -> argparse.ArgumentParser:
                          help="this unit is allowed not to report; a decision "
                               "on the record")
     verdict.set_defaults(func=_cmd_verdict)
+
+    compare = subparsers.add_parser(
+        "compare", help="judge one unit's stored walks across two times, by "
+                        "handing them to the referee")
+    store_arg(compare)
+    json_out(compare)
+    compare.add_argument("--unit", required=True, help="the unit key")
+    compare.add_argument("--before", required=True, metavar="TIME",
+                         help="use the newest capture at or before this time")
+    compare.add_argument("--after", required=True, metavar="TIME",
+                         help="and compare it with the newest at or before this")
+    compare.add_argument("--strict-fields", action="store_true",
+                         help="pass through to the referee: exit 2 if either "
+                              "capture carries no record of object properties")
+    compare.add_argument("--aggregation-prefix", action="append", metavar="OLD=NEW",
+                         help="pass through to the referee. Repeatable; nothing "
+                              "is inferred")
+    compare.add_argument("--command", default="bmc-sensor-audit",
+                         help="how to invoke the referee")
+    compare.set_defaults(func=_cmd_compare)
 
     validate = subparsers.add_parser(
         "validate", help="check an artifact against the format it declares")

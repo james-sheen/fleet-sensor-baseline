@@ -53,7 +53,9 @@ pip install fleet-sensor-baseline
 
 The core has **no dependencies**. Ingest, baseline, outliers, drift, verdict and
 validate are JSON and arithmetic, so the vertical and horizontal axes run on a jump
-host with nothing provisioned. The collector needs the referee on PATH:
+host with nothing provisioned. `collect` and `compare` both need the referee on
+PATH -- one to walk a BMC, the other to judge two stored walks -- and the extra
+is named for the first only because renaming it would break every install line:
 
 ```
 pip install "fleet-sensor-baseline[collect]"
@@ -75,6 +77,10 @@ fleet-sensor-baseline outliers --store fleet-store --baseline baseline.json
 
 # the fleet run: every expected unit must have reported
 fleet-sensor-baseline verdict --store fleet-store --expect-units racks.txt
+
+# did a threshold move between two stored walks? ask the referee
+fleet-sensor-baseline compare --store fleet-store --unit h-0042 \
+    --before 2026-08-01T00:00:00Z --after 2026-08-20T00:00:00Z
 
 # check any artifact against the format it declares
 fleet-sensor-baseline validate baseline.json
@@ -239,6 +245,33 @@ key the file declares rather than on a shape guessed from the fields present.
 
 See [docs/formats.md](docs/formats.md).
 
+## Comparing across time
+
+`drift` answers what changed in the RECORDS -- firmware, the sensor set, which
+units reported. It does not open the walks. A threshold edited on a sensor that
+stayed present is invisible to it, and invisible to `collect --etag-cache` too:
+a collection ETag moves when membership changes, so a skip record says in as
+many words that it proves `membership`, and the docs say membership is not
+enough for a threshold audit.
+
+`compare` is the missing half, and it is selection rather than judgment. It
+resolves the newest capture at or before each of two times, pulls both payloads
+out of the store, and hands them to `bmc-sensor-audit regression`, whose job
+this is. `--strict-fields` and `--aggregation-prefix` pass straight through.
+Exit codes come back in the family's vocabulary; the referee's refusals come
+back in the referee's own words.
+
+**A record filed from a skip is refused as an input, and that rule is the whole
+point rather than tidiness.** A skip reuses the earlier capture's payload
+digest, so comparing a walk against one resolves both ends to the same stored
+object: the referee would be handed a file and itself, and would correctly
+answer *no drift*. The question asked was whether a threshold moved. Force a
+full walk for that surface, or pick a time when one was taken.
+
+Pairing is surface to surface, per [a unit is a tuple](#a-unit-is-a-tuple), so a
+machine answering on a host BMC and an HMC gets one comparison each rather than
+one compared against the other.
+
 ## When the cohort disagrees with itself
 
 A sensor is **expected** at or above `--present-threshold` (0.99), **foreign** at
@@ -308,15 +341,15 @@ first would pass by finding nothing.
 
 | | count |
 |---|---|
-| tests collected | 341 |
-| of those, requiring `bmc-sensor-audit` | 37 |
+| tests collected | 363 |
+| of those, requiring `bmc-sensor-audit` | 40 |
 
 **The predicate**: `pytest --collect-only` over the test files git tracks, and
 the same again with `-m seam` for the second row. Collection rather than a pass
 tally, because a skip count is true only on the machine that measured it —
 `tests/test_readme_counts.py` derives both and fails if either drifts.
 
-Run it dependency-free and the 37 skip. Install the referee and they run.
+Run it dependency-free and the 40 skip. Install the referee and they run.
 
 **No pass/skip tally is quoted here on purpose.** The first version of this
 section did, and both numbers were wrong within a day — not because tests

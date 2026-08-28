@@ -70,6 +70,11 @@ dependencies = []
 # this floor rather than merely old, and `preflight()` can refuse instead of
 # saying it could not tell. That is the whole reason this floor moved: the check
 # was written before the thing it checks existed.
+#
+# **The name is narrower than the contents, and renaming it would break every
+# caller's install line.** `compare` needs the referee too -- it hands two
+# stored walks to `regression` -- so this extra now gates two commands. Both
+# were verified against every release the range admits: 0.2.0, 0.2.1, 0.2.2.
 collect = ["bmc-sensor-audit>=0.2.0,<0.3"]
 dev = ["pytest>=7"]
 
