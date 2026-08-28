@@ -6,8 +6,17 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.2.1**, tagged `v0.2.1`, Apache-2.0, on PyPI as
+**Released — 0.2.2**, tagged `v0.2.2`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
+
+**0.2.2 adds `compare`, the threshold audit across time.** `drift` reads records
+and never opens a walk, so a threshold edited on a sensor that stayed present was
+invisible to it — and invisible to `collect --etag-cache` too, which is why a
+skip record says it proves membership. `compare` resolves the newest capture at
+or before each of two times, per surface, and hands both to the referee's
+`regression`. A record filed from a skip is refused as an input: it reuses the
+earlier payload, so comparing against one would judge a file against itself and
+report no drift.
 
 **0.2.1 closes the seam with the referee, and fixes a validator that could
 not check the one file it most needed to.** `baseline --for-referee` writes the
