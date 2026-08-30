@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -714,13 +715,98 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class _StdoutThatOutlivesItsReader:
+    """`sys.stdout`, for a program whose exit code is a claim about a fleet.
+
+    **A reader that stops reading has said something about itself, not about
+    the rack.** `fleet-sensor-baseline baseline ... | head` is an ordinary
+    thing to do, and before this every subcommand died of it -- including
+    `--help`, which is the likeliest thing anyone pipes. The failure arrived
+    two ways, and neither is in the vocabulary `exits.py` defines: a report
+    long enough to fill the pipe buffer raised out of `print` and the
+    interpreter exited `1`, which this tool means as FINDINGS; a shorter one
+    survived to the shutdown flush, printed `Exception ignored` to stderr and
+    exited `120`, which is not a verdict at all.
+
+    Both replace a statement about the fleet with a statement about the
+    terminal. Absorbing rather than refusing is the point: `INCOMPLETE` says
+    the fleet could not be assessed, and a baseline whose reader walked away
+    was assessed perfectly well.
+
+    The sibling package has carried this since its own two occurrences. This
+    is the third in the family, and it shipped in 0.2.2.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self.reader_left = False
+
+    def _abandon(self) -> None:
+        """Point the descriptor at nowhere, then stop trying.
+
+        The interpreter flushes `stdout` again on its way out, on bytes this
+        stream may still hold. Without the redirect that second flush raises
+        where no `except` can reach it -- which is the `Exception ignored`
+        line, and the `120`.
+        """
+        self.reader_left = True
+        try:
+            fileno = self._stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            return  # captured by a harness rather than piped; nothing to point
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), fileno)
+        except OSError:
+            pass
+
+    def write(self, text: str) -> int:
+        if self.reader_left:
+            return len(text)
+        try:
+            return self._stream.write(text)
+        except BrokenPipeError:
+            self._abandon()
+            return len(text)
+
+    def flush(self) -> None:
+        if self.reader_left:
+            return
+        try:
+            self._stream.flush()
+        except BrokenPipeError:
+            self._abandon()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    # Installed before the parser runs, because `--help` prints through it too
+    # and argparse exits from inside `parse_args`.
+    stdout = _StdoutThatOutlivesItsReader(sys.stdout)
+    sys.stdout = stdout
     try:
-        return args.func(args)
-    except StoreError as exc:
-        print(f"{args.command}: {exc}", file=sys.stderr)
+        args = build_parser().parse_args(argv)
+        try:
+            return args.func(args)
+        except StoreError as exc:
+            print(f"{args.command}: {exc}", file=sys.stderr)
+            return INCOMPLETE
+    except BrokenPipeError:
+        # A pipe that broke somewhere the wrapper does not cover is a failure
+        # to deliver, and this tool says so with the code that means it.
+        print("the output could not be written: the pipe closed",
+              file=sys.stderr)
         return INCOMPLETE
+    finally:
+        # **Flush through the wrapper, before handing the stream back.** A
+        # report short enough to sit in the buffer is not written until the
+        # interpreter flushes on its way out -- by which point this wrapper is
+        # gone and the failure lands where no `except` can reach it.
+        try:
+            stdout.flush()
+        finally:
+            sys.stdout = stdout._stream
 
 
 if __name__ == "__main__":  # pragma: no cover
