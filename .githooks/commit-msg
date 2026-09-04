@@ -14,12 +14,17 @@
 # while the code did something else entirely. Nothing checked the claim, because it
 # was a claim in a comment.
 #
-# This runs the publication vocabulary over the message: must this text never be
-# published? It is the one surface that cannot be undone after a push.
+# Two checkers now, because they answer two different questions:
+#   hygiene_check.py --message   must this text never be published?
+#   commit_msg_check.py          is this message shaped like the others?
 #
-# To commit past it knowingly:   git commit --no-verify
-# Note that --no-verify also disables the pre-commit hygiene sweep.
+# Publication first: it is the one that cannot be undone after a push.
+#
+# To commit past both knowingly:   git commit --no-verify
+# Note that --no-verify also disables the pre-commit hygiene sweep. That is why
+# these refuse only on objective problems and merely note the heuristic ones.
 set -e
 ROOT="$(git rev-parse --show-toplevel)"
 
-exec python3 "$ROOT/tools/hygiene_check.py" --message "$1"
+python3 "$ROOT/tools/hygiene_check.py" --message "$1"
+exec python3 "$ROOT/tools/commit_msg_check.py" "$1"

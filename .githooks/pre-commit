@@ -1,5 +1,6 @@
 #!/bin/sh
-# Refuse a commit carrying something that should not be published.
+# Refuse a commit carrying something that should not be published, and one whose
+# README no longer describes the suite.
 #
 # Activate once per clone:   git config core.hooksPath .githooks
 #
@@ -8,16 +9,74 @@
 # for a repository authored in public means the safety check is missing exactly
 # when a new contributor needs it most.
 #
-# The companion commit-msg hook runs the SAME vocabulary over the message, which
-# is the one published surface that cannot be corrected after a push.
-#
 # To commit past it knowingly:   git commit --no-verify
+# That is a real escape hatch and it should be rare enough to notice.
 set -e
 ROOT="$(git rev-parse --show-toplevel)"
 
 # FIRST, because it decides whether anything below it can speak for this commit.
-# The checks here read the WORKING TREE and the commit records the INDEX; when
-# those differ, a green hook is green about files that are not being committed.
+# Every other check here reads the WORKING TREE; the commit records the INDEX.
+# When they differ, a green hook is green about files that are not being
+# committed -- which is how this repository shipped a README test count that was
+# six short, twice in one day, with this hook passing both times.
 python3 "$ROOT/tools/hygiene_check.py" --staged-is-what-ships
 
-exec python3 "$ROOT/tools/hygiene_check.py"
+python3 "$ROOT/tools/hygiene_check.py"
+
+# The README's test count, checked where the drift is created rather than where it
+# is discovered. Dependency-free and about 0.2s.
+#
+# The count it checks is taken from what git TRACKS, not from what the directory
+# holds, and that is the whole reason it can run here at all. The published 289 was
+# measured on a working tree carrying a test file that was never committed: true of
+# that disk, false of this repository. A disk-derived count would make this hook
+# red on any tree with an untracked test in it -- red every run, for a reason that
+# is not a defect, which is how a check teaches people to pass --no-verify. That
+# flag also switches off the hygiene sweep above, so a check nobody can satisfy
+# costs more than the one it was added to provide.
+#
+# The identity this commit will carry.
+#
+# A commit's AUTHOR is neither its message nor a file in it, so no text scanner
+# reaches it -- the hygiene rules ran over both surfaces and a personal address
+# still reached 24 published commits, because a local `user.email` quietly beat
+# the global one and nothing read it. Checked here, before the commit exists,
+# because after it is pushed a force-push changes the SHAs and removes nothing:
+# the old objects stay fetchable and the address stays published.
+AUTHOR_EMAIL=$(git config user.email || true)
+case "$AUTHOR_EMAIL" in
+    *@users.noreply.github.com|*@noreply.github.com) ;;
+    "")
+        echo "pre-commit: no user.email is set, so this commit would carry a guess." >&2
+        exit 1 ;;
+    *)
+        echo "pre-commit: user.email is a real address, and a commit publishes it." >&2
+        echo "            Set the GitHub noreply address for this repository:" >&2
+        echo "              git config user.email <you>@users.noreply.github.com" >&2
+        echo "            A local setting beats the global one; that is how this" >&2
+        echo "            reached 24 published commits before anyone looked." >&2
+        exit 1 ;;
+esac
+
+# A missing pytest fails rather than skips. A gate that converts its own red into a
+# skip removes the failure and the evidence together.
+if ! python3 -c "import pytest" 2>/dev/null; then
+    echo "pre-commit: pytest is not installed, so the README count check cannot run." >&2
+    echo "            python3 -m pip install pytest    (or commit with --no-verify)" >&2
+    exit 1
+fi
+
+# The README-count check, where a repository has one.
+#
+# This step used to name `tests/test_readme_commands.py` outright. That file is
+# this repository's; the same hook copied into four others refused EVERY commit,
+# because pytest exits non-zero when it collects nothing and the hook could not
+# tell "no such test" from "the test failed". The hooks are meant to be one file
+# across the repositories, so the step has to find its target by SHAPE rather
+# than be told a name that is only true here.
+README_TESTS=$(ls "$ROOT"/tests/test_readme*.py 2>/dev/null || true)
+if [ -z "$README_TESTS" ]; then
+    exit 0
+fi
+
+exec python3 -m pytest $README_TESTS -q -p no:cacheprovider
