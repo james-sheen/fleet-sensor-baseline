@@ -6,8 +6,17 @@
 list of machines and the history of captures, and answers the two questions the
 referee cannot.
 
-**Released — 0.2.2**, tagged `v0.2.2`, Apache-2.0, on PyPI as
+**Released — 0.2.3**, tagged `v0.2.3`, Apache-2.0, on PyPI as
 `fleet-sensor-baseline`.
+
+**0.2.3 admits the referee's 0.3 line, and stops a closed pipe reading as a
+finding.** The `collect` extra held `bmc-sensor-audit` below 0.3 for eighteen
+days after 0.3.0, and nothing here needed it: two tests read what 0.2 kept
+where. They read the referee as installed now, and the suite passes on
+referees 0.2.7, 0.3.0 and 0.3.5 -- which also lets this extra sit beside
+`odm-cert-generator`, whose releases from 0.2.2 require the 0.3 line. And every
+subcommand, `--help` included, raised `BrokenPipeError` when its reader closed
+the pipe, exiting 1, which this family reads as findings about a rack.
 
 **0.2.2 adds `compare`, the threshold audit across time.** `drift` reads records
 and never opens a walk, so a threshold edited on a sensor that stayed present was
