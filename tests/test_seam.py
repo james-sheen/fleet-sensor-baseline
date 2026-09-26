@@ -317,6 +317,7 @@ class TestTheDialectsAgree:
         # at 0.3.0; `bmc_sensor_audit.cli` imports it by name in both lines.
         # Reading it from where one release happened to keep it is what held
         # this suite -- and the collect extra with it -- below 0.3.
+        _import_referee()
         from bmc_sensor_audit.cli import parse_prefix_map
         try:
             return dict(parse_prefix_map([entry]))
@@ -369,6 +370,7 @@ class TestTheEtagSkipIsDetectedAgainstTheRealTool:
     """
 
     def _rack(self, tmp_path, machine, unchanged_ok=True):
+        _import_referee()
         from fleet_sensor_baseline.collect.backends.subprocess_backend import \
             subprocess_backend
         from fleet_sensor_baseline.collect.collector import Collector, Target
@@ -417,6 +419,7 @@ class TestTheEtagSkipIsDetectedAgainstTheRealTool:
     def test_the_cache_file_is_the_referees_own_format(self, tmp_path):
         """Written by the referee, read by the referee. This layer only chooses
         WHERE it goes, and must not start parsing it."""
+        _import_referee()
         from bmc_sensor_audit.inventory.redfish import ETAG_CACHE_FORMAT
         store, _, _ = self._rack(tmp_path, self._machine())
         caches = sorted((store.root / "etags").glob("*.json"))
@@ -426,6 +429,7 @@ class TestTheEtagSkipIsDetectedAgainstTheRealTool:
     def test_a_changed_set_is_walked_rather_than_skipped(self, tmp_path):
         """Non-vacuity, and the failure that would matter most: a sensor that
         vanished must not be skipped past."""
+        _import_referee()
         from fleet_sensor_baseline.collect.backends.subprocess_backend import \
             subprocess_backend
         from fleet_sensor_baseline.collect.collector import Collector, Target
@@ -588,6 +592,7 @@ class TestTheTlsFlagsExistOnTheReferee:
     def test_the_collector_sends_the_pin_it_was_given(self, tmp_path):
         """End to end through this layer's own backend, so the argv assembled
         here is the argv the referee sees."""
+        _import_referee()
         from fleet_sensor_baseline.collect.backends.subprocess_backend import \
             subprocess_backend
         from fleet_sensor_baseline.collect.collector import Target
