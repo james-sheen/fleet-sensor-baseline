@@ -50,6 +50,22 @@ NEEDS_TOOL = pytest.mark.skipif(
            "checked here. This is not a passing seam, it is an unchecked one")
 
 
+def _declared_ceiling():
+    """The referee ceiling this package declares, read like its floor is."""
+    import re
+    from importlib import metadata
+    try:
+        requirements = metadata.requires("fleet-sensor-baseline") or []
+    except metadata.PackageNotFoundError:
+        return None
+    for requirement in requirements:
+        if requirement.startswith("bmc-sensor-audit"):
+            found = re.search(r"<\s*(\d+)\.(\d+)(?:\.(\d+))?", requirement)
+            if found:
+                return tuple(int(g) for g in found.groups() if g is not None)
+    return None
+
+
 def _import_referee():
     try:
         import bmc_sensor_audit  # noqa: F401
@@ -268,7 +284,14 @@ def test_the_pin_floor_still_resolves():
             f"below the release that added the flag, so this is legitimate and "
             f"unverifiable rather than a pass")
     assert observed >= floor
-    assert observed < (0, 3), f"bmc-sensor-audit {observed} is outside the pin"
+    # THE CEILING FROM THE SAME METADATA AS THE FLOOR. This line said
+    # `< (0, 3)` -- a second copy of the pin, in the test whose docstring says
+    # nothing here restates a version -- and it held the collect extra below
+    # the referee's 0.3 line for as long as nobody re-read it.
+    ceiling = _declared_ceiling()
+    assert ceiling is not None, "the declared pin names no ceiling to hold the referee to"
+    assert observed[:len(ceiling)] < ceiling, (
+        f"bmc-sensor-audit {observed} is outside the pin")
 
 @NEEDS_TOOL
 class TestTheDialectsAgree:
@@ -288,7 +311,13 @@ class TestTheDialectsAgree:
 
     @staticmethod
     def _referee(entry):
-        from bmc_sensor_audit.inventory.regression import parse_prefix_map
+        # THE PARSER THE REFEREE'S OWN COMMAND CALLS, taken from the module that
+        # calls it. It lived in `bmc_sensor_audit.inventory.regression` through
+        # 0.2 and moved to `presence_audit.regression` when that core split out
+        # at 0.3.0; `bmc_sensor_audit.cli` imports it by name in both lines.
+        # Reading it from where one release happened to keep it is what held
+        # this suite -- and the collect extra with it -- below 0.3.
+        from bmc_sensor_audit.cli import parse_prefix_map
         try:
             return dict(parse_prefix_map([entry]))
         except ValueError:

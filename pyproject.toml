@@ -75,7 +75,17 @@ dependencies = []
 # caller's install line.** `compare` needs the referee too -- it hands two
 # stored walks to `regression` -- so this extra now gates two commands. Both
 # were verified against every release the range admits: 0.2.0, 0.2.1, 0.2.2.
-collect = ["bmc-sensor-audit>=0.2.0,<0.3"]
+#
+# **The ceiling rose to <0.4 on 2026-09-26**, eighteen days after the referee
+# reached 0.3.0. Nothing here was wrong with the referee's 0.3 line: the only
+# reds were two tests reading what 0.2 happened to keep where -- the prefix
+# parser, which moved to `presence-audit` with the 0.3.0 split, and a ceiling
+# typed into the pin guard. Both read the referee as it is now. Measured
+# before the move: 446 passed on 0.2.7 and 8 failed on 0.3.5, all eight those
+# two; after it, the suite passes on 0.2.7, 0.3.0 and 0.3.5. Meanwhile
+# `odm-cert-generator` 0.2.2 already required the referee at >=0.3.0, so this
+# extra could not be installed beside the certificate renderer at all.
+collect = ["bmc-sensor-audit>=0.2.0,<0.4"]
 dev = ["pytest>=7"]
 
 [project.scripts]

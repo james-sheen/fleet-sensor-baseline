@@ -377,8 +377,12 @@ a walk with the referee's own reader and asserts the fixture still matches.
 
 ## Upstream
 
-Pinned at `bmc-sensor-audit>=0.2.0,<0.3`, and the floor is **derived, not
-chosen**. It has moved three times, each time to consume something reported from
+Pinned at `bmc-sensor-audit>=0.2.0,<0.4`. **The ceiling was `<0.3` until
+2026-09-26**, eighteen days into the referee's 0.3 line, and what held it there
+was this repository's own tests reading where 0.2 kept things -- the prefix
+parser, which moved to `presence-audit` at 0.3.0, and a ceiling typed into the
+pin guard. Both now read the referee as installed, and the suite passes on 0.2.7,
+0.3.0 and 0.3.5. The floor is **derived, not chosen**. It has moved three times, each time to consume something reported from
 here:
 
 - `>=0.1.2` for `--password-env`, so a credential never crosses argv, and for
